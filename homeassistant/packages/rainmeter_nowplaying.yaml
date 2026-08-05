@@ -1,0 +1,146 @@
+# HA Now Playing - Home Assistant side
+# =============================================================================
+# Drop this in config/packages/ and add to configuration.yaml:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Then edit the two marked blocks: THE SOURCE PICKER and RAINMETER_BASE.
+# Nothing else needs changing.
+#
+# What it does: picks whichever media player is currently playing, hands its
+# metadata to nowplaying.py, and re-runs on every track change. The script
+# writes www/nowplaying.json + www/nowplaying_cover.png, which the Rainmeter
+# skin reads over plain HTTP with no token.
+# =============================================================================
+
+template:
+  - sensor:
+      # ---------------------------------------------------------------------
+      # THE SOURCE PICKER - the part you tune.
+      #
+      # Default: every media_player in the house minus an exclude list,
+      # preferring one that is playing over one merely paused. That covers
+      # Music Assistant, Spotify, Sonos, Cast, Plex, Jellyfin, Squeezelite,
+      # AirPlay receivers and anything else, with no per-integration code -
+      # they all expose the same media_player attributes.
+      #
+      # For a fixed priority order, replace the inner loop's source with your
+      # own list so the first match in YOUR order wins:
+      #
+      #   {% for p in [ states.media_player.office,
+      #                 states.media_player.living_room ] if ... %}
+      #
+      # See docs/sources.md for per-integration notes.
+      # ---------------------------------------------------------------------
+      - name: "Rainmeter Source Entity"
+        unique_id: rainmeter_source_entity
+        icon: mdi:cast-audio
+        state: >-
+          {% set exclude = [
+               'media_player.tv',
+               'media_player.appletv',
+             ] %}
+          {% set ns = namespace(pick=none) %}
+          {% for want in ['playing', 'paused'] %}
+            {% if ns.pick is none %}
+              {% for p in states.media_player
+                    if p.entity_id not in exclude
+                    and p.state == want
+                    and p.attributes.get('media_title') %}
+                {% if ns.pick is none %}{% set ns.pick = p.entity_id %}{% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.pick if ns.pick else 'none' }}
+
+      # Changes whenever the TRACK changes, not just when the player does.
+      # Needed because a new song on the same speaker leaves the entity id
+      # identical, so the picker above never changes state and would never
+      # trigger a refresh. Deliberately a separate sensor rather than an
+      # attribute on the picker: a template sensor cannot read its own state
+      # while computing it, so attributes there would lag by one update.
+      - name: "Rainmeter Track Key"
+        unique_id: rainmeter_track_key
+        icon: mdi:music-note
+        state: >-
+          {% set e = states('sensor.rainmeter_source_entity') %}
+          {% if e in ['none', 'unknown', 'unavailable'] %}
+            idle
+          {% else %}
+            {{ (states(e) ~ '|' ~ (state_attr(e, 'media_title') or '')
+                ~ '|' ~ (state_attr(e, 'media_artist') or ''))[:250] }}
+          {% endif %}
+
+command_line:
+  - sensor:
+      name: "Rainmeter Now Playing"
+      unique_id: rainmeter_nowplaying
+      # ---------------------------------------------------------------------
+      # RAINMETER_BASE: the URL the *Rainmeter PC* uses to reach Home
+      # Assistant. It is baked into cover_url, so 127.0.0.1 will not work here
+      # even though the script itself runs on the HA box - use the LAN address
+      # or hostname, including the port.
+      # ---------------------------------------------------------------------
+      command: >-
+        python3 /config/rainmeter/nowplaying.py
+        --www /config/www
+        --name nowplaying
+        --ha-base "http://homeassistant.local:8123"
+        --picture "{{ state_attr(states('sensor.rainmeter_source_entity'), 'entity_picture') or '' }}"
+        --title-b64 "{{ (state_attr(states('sensor.rainmeter_source_entity'), 'media_title') or '') | base64_encode }}"
+        --artist-b64 "{{ (state_attr(states('sensor.rainmeter_source_entity'), 'media_artist')
+                          or state_attr(states('sensor.rainmeter_source_entity'), 'media_album_artist')
+                          or '') | base64_encode }}"
+        --album-b64 "{{ (state_attr(states('sensor.rainmeter_source_entity'), 'media_album_name') or '') | base64_encode }}"
+        --source-b64 "{{ (state_attr(states('sensor.rainmeter_source_entity'), 'friendly_name') or '') | base64_encode }}"
+        --state "{{ states(states('sensor.rainmeter_source_entity')) if states('sensor.rainmeter_source_entity') not in ['none','unknown','unavailable'] else 'idle' }}"
+      # Deliberately huge: this is event-driven by the automation below and
+      # must never poll on its own. Every run downloads and re-encodes artwork.
+      scan_interval: 21600
+      command_timeout: 20
+      value_template: "{{ value_json.state }}"
+      json_attributes:
+        - title
+        - artist
+        - album
+        - source
+        - art
+        - hex
+        - ver
+
+automation:
+  - id: rainmeter_nowplaying_refresh
+    alias: "Rainmeter - Refresh now playing"
+    description: >-
+      Republishes the JSON and artwork on every track or source change.
+
+      The repeated pokes are not paranoia. Several integrations announce the
+      new title before the new artwork URL resolves, so a single fetch on the
+      metadata change grabs the PREVIOUS track's cover. This re-runs on a
+      ladder; the cache-buster is derived from the image bytes, so a repeat
+      with unchanged art is a no-op and costs nothing. Trim the list if your
+      source is well behaved.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.rainmeter_track_key
+          - sensor.rainmeter_source_entity
+      - trigger: homeassistant
+        event: start
+    conditions: []
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.rainmeter_now_playing
+      # Gaps between pokes, not absolute times: 0.6s, 1.5s, 3s, 6s after the
+      # first attempt.
+      - repeat:
+          for_each: [600, 900, 1500, 3000]
+          sequence:
+            - delay:
+                milliseconds: "{{ repeat.item }}"
+            - action: homeassistant.update_entity
+              target:
+                entity_id: sensor.rainmeter_now_playing

@@ -1,0 +1,150 @@
+# HA Status Board - Home Assistant side
+# =============================================================================
+# Clock, climate and a presence board, published to www/statusboard.json.
+#
+# Drop this in config/packages/ and add to configuration.yaml:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Then edit the PEOPLE and CLIMATE blocks below. Everything the skin renders
+# is built here in plain YAML - write_json.py is just the file writer, so you
+# can change what appears without touching Python.
+#
+# Up to six people are supported. Empty slots hide themselves in the skin, so
+# a three-person board needs no skin edits.
+# =============================================================================
+
+template:
+  - sensor:
+      - name: "Rainmeter Status Board Payload"
+        unique_id: rainmeter_statusboard_payload
+        icon: mdi:view-dashboard-outline
+        # The state is a short fingerprint, not the payload: HA caps a state at
+        # 255 characters and the full document is longer. The automation below
+        # triggers on this changing, and the command_line sensor re-renders the
+        # real document at that moment.
+        state: >-
+          {#- ---------------------------------------------------------------
+              PEOPLE: entity + the label to show. person.* is the natural fit
+              (state is 'home' / 'not_home' and last_changed is the arrival),
+              but device_tracker.*, binary_sensor.* or input_boolean.* work
+              just as well - anything whose state is one of the `home_states`
+              below. See docs/sources.md for using an automation's
+              last_triggered instead.
+              --------------------------------------------------------------- #}
+          {% set people = [
+               ('person.alex',  'ALEX'),
+               ('person.blake', 'BLAKE'),
+               ('person.casey', 'CASEY'),
+             ] %}
+          {% set home_states = ['home', 'on', 'true', 'Home'] %}
+          {% set ns = namespace(key='') %}
+          {% for e, label in people %}
+            {% set ns.key = ns.key ~ label ~ ':' ~ states(e) ~ ' ' %}
+          {% endfor %}
+          {{ (ns.key ~ states('climate.house'))[:250] }}
+
+        attributes:
+          # The full JSON document. Kept as an attribute because attributes
+          # have no length limit, and rendering it here means the command_line
+          # command stays a single short line.
+          payload: >-
+            {%- set people = [
+                 ('person.alex',  'ALEX'),
+                 ('person.blake', 'BLAKE'),
+                 ('person.casey', 'CASEY'),
+               ] -%}
+            {%- set home_states = ['home', 'on', 'true', 'Home'] -%}
+            {#- Colours the skin uses verbatim, as Rainmeter "r,g,b" strings -#}
+            {%- set col_home = '124,227,139' -%}
+            {%- set col_away = '255,110,110' -%}
+
+            {#- ---------------------------------------------------------------
+                CLIMATE: set climate_entity to '' to hide the whole block.
+                --------------------------------------------------------------- #}
+            {%- set climate_entity = 'climate.house' -%}
+            {%- set cur = state_attr(climate_entity, 'current_temperature') if climate_entity else none -%}
+            {%- set target = state_attr(climate_entity, 'temperature') if climate_entity else none -%}
+            {%- set action = state_attr(climate_entity, 'hvac_action') if climate_entity else none -%}
+            {%- set action_colours = {
+                   'heating': '255,148,90',
+                   'cooling': '125,190,255',
+                   'drying':  '190,170,255',
+                   'fan':     '190,200,210',
+                   'idle':    '170,178,190',
+                   'off':     '170,178,190',
+                 } -%}
+
+            {%- set ns = namespace(rows=[]) -%}
+            {%- for e, label in people[:6] -%}
+              {%- set home = states(e) in home_states -%}
+              {#- Only show an arrival time if they came home TODAY, otherwise
+                  yesterday's timestamp reads as if they just walked in. -#}
+              {%- set lc = states[e].last_changed if states[e] is not none else none -%}
+              {%- set today = home and lc is not none
+                              and (lc | as_local).date() == (now()).date() -%}
+              {%- set ns.rows = ns.rows + [{
+                    'name':  label,
+                    'color': col_home if home else col_away,
+                    'time':  (lc | as_local).strftime('%-I:%M %p') if today else '--',
+                  }] -%}
+            {%- endfor -%}
+            {%- for i in range(ns.rows | count, 6) -%}
+              {%- set ns.rows = ns.rows + [{'name': '', 'color': '0,0,0', 'time': ''}] -%}
+            {%- endfor -%}
+
+            {#- tojson on every value is what keeps a name with an apostrophe
+                from breaking the document. -#}
+            {
+              {#- The degree sign is formatted HERE, not in the skin: Rainmeter
+                  reads a BOM-less .ini as ANSI and renders a UTF-8 degree as
+                  mojibake. JSON is unambiguously UTF-8, so it survives. Change
+                  the unit or drop it entirely without touching the skin. -#}
+              "cur": {{ ((cur | round(1) | string ~ '°') if cur is not none else '--') | tojson }},
+              "set": {{ ((target | round(0) | int | string ~ '°') if target is not none else '--') | tojson }},
+              "action": {{ (action | title if action else '') | tojson }},
+              "acolor": {{ (action_colours.get(action, '170,178,190')) | tojson }},
+              "climate_on": {{ ('1' if climate_entity and cur is not none else '0') | tojson }},
+              "count": {{ (people[:6] | count) | string | tojson }}
+              {%- for r in ns.rows -%}
+              , "p{{ loop.index }}_name": {{ r.name | tojson }},
+                "p{{ loop.index }}_color": {{ r.color | tojson }},
+                "p{{ loop.index }}_time": {{ r.time | tojson }}
+              {%- endfor %}
+            }
+
+command_line:
+  - sensor:
+      name: "Rainmeter Status Board"
+      unique_id: rainmeter_statusboard
+      command: >-
+        python3 /config/rainmeter/write_json.py
+        --www /config/www
+        --out statusboard.json
+        --b64 "{{ state_attr('sensor.rainmeter_status_board_payload', 'payload') | base64_encode }}"
+      scan_interval: 21600
+      command_timeout: 15
+      value_template: "{{ value_json.ok }}"
+
+automation:
+  - id: rainmeter_statusboard_refresh
+    alias: "Rainmeter - Refresh status board"
+    description: >-
+      Rewrites statusboard.json whenever anything on it changes. The midnight
+      trigger is what clears yesterday's arrival times: the payload template
+      only shows a time if the person came home today, so the board needs one
+      re-render after the date rolls over even if nobody has moved.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: sensor.rainmeter_status_board_payload
+      - trigger: time
+        at: "00:00:01"
+      - trigger: homeassistant
+        event: start
+    conditions: []
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.rainmeter_status_board
