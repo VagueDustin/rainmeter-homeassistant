@@ -30,6 +30,17 @@ with no BOM as ANSI. Either save the file as UTF-16 LE **with** a BOM, or —
 better — keep the `.ini` ASCII and move the symbol into the JSON, which is what
 this project does. Change the unit in the YAML, not the skin.
 
+## Descenders are sliced off (the tail of g, y or p)
+
+`ClipString=2` clips to **both** W and H, so a clip box shorter than the font's
+full line box cuts the bottoms off. A point is 1.333 px, so a 22pt line box is
+about 35px - a box of 34 looks right until a word with a descender comes along.
+
+The skin derives each line's height from its font size (`H=(#TitleSize#*2)`)
+so this cannot come back. If you change `TitleSize` or `ArtistSize`, leave the
+`*2` alone: it clears the descenders and is still well short of two lines, so
+long text ellipsizes instead of wrapping.
+
 ## The optional "playing on ..." line will not hide
 
 `!ShowMeterGroup` un-hides every meter in the group, overriding a static
