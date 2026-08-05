@@ -6,7 +6,7 @@ Two Rainmeter skins driven by Home Assistant, with no access token stored on the
 
 ![HA Now Playing](screenshots/nowplaying.png)
 
-**HA Status Board** — clock, date, climate and a presence board. Up to six people; empty slots hide themselves, so adding or removing someone is a YAML edit and never a skin edit.
+**HA Status Board** — a clock with two configurable rows underneath: up to 4 **stats** (a label over a value) and up to 6 **chips** (a coloured name over a sub-line). Nothing in the skin knows what a thermostat is — the screenshot below happens to show temperature, HVAC, setpoint and power draw over three people, a door and a printer, but every slot is just a string you build in YAML. Empty slots hide themselves, empty rows collapse, and the panel height follows.
 
 ![HA Status Board](screenshots/statusboard.png)
 
@@ -47,6 +47,8 @@ docs/
 
 `write_json.py` is deliberately dumb: it takes a JSON document a Home Assistant template already rendered and writes it to `www/`. All of the status board's logic lives in ordinary YAML you can edit, and the same script will happily back a skin of your own.
 
+That is what makes the status board general. A slot is a `(label, value, colour)` or `(name, colour, sub)` tuple you build from any entity, so the same skin renders a thermostat, a UPS load, a printer's ink level or the next bin collection without a line of skin markup changing. Slots are also clipped to their column width, so a long label ellipsizes instead of walking over its neighbour.
+
 ## Quick start
 
 1. Copy `homeassistant/scripts/` to `/config/rainmeter/` on your HA box.
@@ -75,6 +77,7 @@ Both skins keep their tunables in a `[Variables]` block at the top: panel width 
 Two things worth knowing before you edit:
 
 - **Keep the `.ini` files ASCII.** Rainmeter reads a `.ini` with no BOM as ANSI, so a UTF-8 degree sign renders as `Ã‚Â°`. That is why the status board's temperature arrives from HA already formatted — change the unit in the YAML, not the skin.
+- The status board spaces its columns from the live slot count, so two stats spread across the panel exactly like four. Keep chip names short — they clip to their column.
 - The now-playing panel measures its text with off-screen "extent probe" meters, because `[Meter:W]` on a width-capped meter reports the *configured* width, not the rendered one. If you add a text line and want it to affect the panel width, it needs a probe too. The comments in the skin explain the pattern.
 
 ## Credits

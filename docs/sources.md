@@ -91,7 +91,39 @@ picker at just that. Worth it if your picker logic is getting long.
 
 ---
 
-# Presence sources
+# Status board slots
+
+The board has two rows and neither is tied to any particular kind of entity.
+
+**Stats** are `(label, value, colour)`. The value is whatever string you build:
+
+```jinja
+('POWER',  states('sensor.house_power') ~ ' W',            AMBER)
+('DISK',   states('sensor.nas_free') | round(0) | int ~ '%', WHITE)
+('BINS',   states('sensor.next_collection') | title,        BLUE)
+('UPTIME', states('sensor.server_uptime'),                  MUTED)
+```
+
+**Chips** are `(name, colour, sub-line)` — a coloured word with something small underneath. Good for anything with a state worth glancing at:
+
+```jinja
+('DOOR',    GREEN if is_state('binary_sensor.front','off') else RED,
+            'Closed' if is_state('binary_sensor.front','off') else 'OPEN')
+('PRINTER', GREEN if is_state('sensor.printer','idle') else AMBER,
+            states('sensor.printer') | title)
+('BACKUP',  GREEN if is_state('binary_sensor.backup_ok','on') else RED,
+            states('sensor.backup_age') ~ 'h ago')
+```
+
+Two practical limits: four stats and six chips, and each slot clips to its
+column width, so keep names short. With six chips on a 680px panel a column is
+about 97px.
+
+Anything referenced in a slot must also appear in the sensor's `state`
+fingerprint at the top of the package, or the board will not re-render when
+that entity changes.
+
+## Presence, specifically
 
 The status board's people list takes any entity whose state is one of
 `home_states` (default `home`, `on`, `true`). The arrival time is that entity's
@@ -111,11 +143,11 @@ lookup for the automation's `last_triggered`:
 ```jinja
 {%- set lt = state_attr('automation.alex_arrives', 'last_triggered') -%}
 {%- set today = lt is not none and (lt | as_local).date() == now().date() -%}
-{%- set ns.rows = ns.rows + [{
-      'name':  'ALEX',
-      'color': col_home if today else col_away,
-      'time':  (lt | as_local).strftime('%-I:%M %p') if today else '--',
-    }] -%}
+{%- set ns.chips = ns.chips + [(
+      'ALEX',
+      GREEN if today else RED,
+      (lt | as_local).strftime('%-I:%M %p') if today else '--'
+    )] -%}
 ```
 
 This form has a useful property: the "did they arrive today" test *is* the reset.

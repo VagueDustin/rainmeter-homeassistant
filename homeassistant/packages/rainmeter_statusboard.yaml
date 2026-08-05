@@ -1,18 +1,22 @@
 # HA Status Board - Home Assistant side
 # =============================================================================
-# Clock, climate and a presence board, published to www/statusboard.json.
+# Builds www/statusboard.json: a clock panel with two configurable rows.
+#
+#   STATS  up to 4 slots, each a small label over a value.
+#   CHIPS  up to 6 slots, each a coloured name over a smaller sub-line.
+#
+# Both rows are entirely yours. The skin renders whatever this file emits and
+# has no idea what a thermostat is - so a slot can hold a temperature, a power
+# reading, a printer's status, the next bin collection, a door, a server, or
+# anything else you can turn into a string.
 #
 # Drop this in config/packages/ and add to configuration.yaml:
 #
 #   homeassistant:
 #     packages: !include_dir_named packages
 #
-# Then edit the PEOPLE and CLIMATE blocks below. Everything the skin renders
-# is built here in plain YAML - write_json.py is just the file writer, so you
-# can change what appears without touching Python.
-#
-# Up to six people are supported. Empty slots hide themselves in the skin, so
-# a three-person board needs no skin edits.
+# Empty slots hide themselves and empty rows collapse, so a board with two
+# stats and no chips needs no skin edits.
 # =============================================================================
 
 template:
@@ -20,97 +24,115 @@ template:
       - name: "Rainmeter Status Board Payload"
         unique_id: rainmeter_statusboard_payload
         icon: mdi:view-dashboard-outline
-        # The state is a short fingerprint, not the payload: HA caps a state at
-        # 255 characters and the full document is longer. The automation below
+        # The state is a short fingerprint, not the payload: a state is capped
+        # at 255 characters and the document is longer. The automation below
         # triggers on this changing, and the command_line sensor re-renders the
-        # real document at that moment.
+        # real document at that moment. Anything referenced in the payload must
+        # also be referenced here, or the board will not update when it changes.
         state: >-
-          {#- ---------------------------------------------------------------
-              PEOPLE: entity + the label to show. person.* is the natural fit
-              (state is 'home' / 'not_home' and last_changed is the arrival),
-              but device_tracker.*, binary_sensor.* or input_boolean.* work
-              just as well - anything whose state is one of the `home_states`
-              below. See docs/sources.md for using an automation's
-              last_triggered instead.
-              --------------------------------------------------------------- #}
-          {% set people = [
-               ('person.alex',  'ALEX'),
-               ('person.blake', 'BLAKE'),
-               ('person.casey', 'CASEY'),
-             ] %}
-          {% set home_states = ['home', 'on', 'true', 'Home'] %}
-          {% set ns = namespace(key='') %}
-          {% for e, label in people %}
-            {% set ns.key = ns.key ~ label ~ ':' ~ states(e) ~ ' ' %}
-          {% endfor %}
-          {{ (ns.key ~ states('climate.house'))[:250] }}
+          {{ [ states('sensor.living_room_temperature'),
+               state_attr('climate.house', 'hvac_action'),
+               state_attr('climate.house', 'temperature'),
+               states('person.alex'),
+               states('person.blake'),
+               states('person.casey'),
+             ] | join('|') | truncate(250, true, '') }}
 
         attributes:
-          # The full JSON document. Kept as an attribute because attributes
-          # have no length limit, and rendering it here means the command_line
-          # command stays a single short line.
           payload: >-
+            {#- =================================================================
+                COLOURS. Rainmeter wants a bare "r,g,b" string. Named here so the
+                slots below stay readable.
+                ================================================================= -#}
+            {%- set WHITE = '255,255,255' -%}
+            {%- set MUTED = '170,178,190' -%}
+            {%- set GREEN = '124,227,139' -%}
+            {%- set RED   = '255,110,110' -%}
+            {%- set BLUE  = '125,190,255' -%}
+            {%- set AMBER = '255,148,90'  -%}
+
+            {#- Handy for a value that should be coloured by how it is doing -#}
+            {%- set hvac = state_attr('climate.house', 'hvac_action') -%}
+            {%- set hvac_colour = {'heating': AMBER, 'cooling': BLUE}.get(hvac, MUTED) -%}
+
+            {#- =================================================================
+                STATS - up to 4. Each entry is (label, value, colour).
+                The label is optional; pass '' to show just the value.
+                Delete entries you do not want; the row shrinks to fit.
+                ================================================================= -#}
+            {%- set stats = [
+                 ('INSIDE',
+                  states('sensor.living_room_temperature') ~ '°',
+                  WHITE),
+                 ('HVAC',
+                  (hvac | title) if hvac else 'Off',
+                  hvac_colour),
+                 ('SET',
+                  (state_attr('climate.house', 'temperature') | round(0) | int | string ~ '°')
+                    if state_attr('climate.house', 'temperature') is not none else '--',
+                  MUTED),
+               ] -%}
+
+            {#- =================================================================
+                CHIPS - up to 6. Each entry is (name, colour, sub-line).
+
+                The example is a presence board off person.* entities, with the
+                arrival time shown only when they came home today - otherwise
+                yesterday's timestamp reads as if they just walked in.
+
+                It does not have to be people. Some other shapes:
+
+                  ('FRONT DOOR', GREEN if is_state('binary_sensor.front','off')
+                                 else RED,
+                   'Closed' if is_state('binary_sensor.front','off') else 'OPEN')
+
+                  ('PRINTER', GREEN if is_state('sensor.printer','idle') else AMBER,
+                   states('sensor.printer') | title)
+
+                  ('BACKUP', GREEN if is_state('binary_sensor.backup_ok','on') else RED,
+                   states('sensor.backup_age') ~ 'h ago')
+                ================================================================= -#}
             {%- set people = [
                  ('person.alex',  'ALEX'),
                  ('person.blake', 'BLAKE'),
                  ('person.casey', 'CASEY'),
                ] -%}
             {%- set home_states = ['home', 'on', 'true', 'Home'] -%}
-            {#- Colours the skin uses verbatim, as Rainmeter "r,g,b" strings -#}
-            {%- set col_home = '124,227,139' -%}
-            {%- set col_away = '255,110,110' -%}
-
-            {#- ---------------------------------------------------------------
-                CLIMATE: set climate_entity to '' to hide the whole block.
-                --------------------------------------------------------------- #}
-            {%- set climate_entity = 'climate.house' -%}
-            {%- set cur = state_attr(climate_entity, 'current_temperature') if climate_entity else none -%}
-            {%- set target = state_attr(climate_entity, 'temperature') if climate_entity else none -%}
-            {%- set action = state_attr(climate_entity, 'hvac_action') if climate_entity else none -%}
-            {%- set action_colours = {
-                   'heating': '255,148,90',
-                   'cooling': '125,190,255',
-                   'drying':  '190,170,255',
-                   'fan':     '190,200,210',
-                   'idle':    '170,178,190',
-                   'off':     '170,178,190',
-                 } -%}
-
-            {%- set ns = namespace(rows=[]) -%}
-            {%- for e, label in people[:6] -%}
-              {%- set home = states(e) in home_states -%}
-              {#- Only show an arrival time if they came home TODAY, otherwise
-                  yesterday's timestamp reads as if they just walked in. -#}
-              {%- set lc = states[e].last_changed if states[e] is not none else none -%}
+            {%- set ns = namespace(chips=[]) -%}
+            {%- for entity, label in people -%}
+              {%- set home = states(entity) in home_states -%}
+              {%- set lc = states[entity].last_changed if states[entity] is not none else none -%}
               {%- set today = home and lc is not none
-                              and (lc | as_local).date() == (now()).date() -%}
-              {%- set ns.rows = ns.rows + [{
-                    'name':  label,
-                    'color': col_home if home else col_away,
-                    'time':  (lc | as_local).strftime('%-I:%M %p') if today else '--',
-                  }] -%}
+                              and (lc | as_local).date() == now().date() -%}
+              {%- set ns.chips = ns.chips + [(
+                    label,
+                    GREEN if home else RED,
+                    (lc | as_local).strftime('%-I:%M %p') if today else '--'
+                  )] -%}
             {%- endfor -%}
-            {%- for i in range(ns.rows | count, 6) -%}
-              {%- set ns.rows = ns.rows + [{'name': '', 'color': '0,0,0', 'time': ''}] -%}
-            {%- endfor -%}
+            {%- set chips = ns.chips -%}
 
-            {#- tojson on every value is what keeps a name with an apostrophe
-                from breaking the document. -#}
+            {#- =================================================================
+                Everything below is plumbing - no need to edit.
+                tojson on every value is what stops an apostrophe in a name or a
+                quote in a sensor state from breaking the document.
+                ================================================================= -#}
+            {%- set stats = stats[:4] -%}
+            {%- set chips = chips[:6] -%}
             {
-              {#- The degree sign is formatted HERE, not in the skin: Rainmeter
-                  reads a BOM-less .ini as ANSI and renders a UTF-8 degree as
-                  mojibake. JSON is unambiguously UTF-8, so it survives. Change
-                  the unit or drop it entirely without touching the skin. -#}
-              "cur": {{ ((cur | round(1) | string ~ '°') if cur is not none else '--') | tojson }},
-              "set": {{ ((target | round(0) | int | string ~ '°') if target is not none else '--') | tojson }},
-              "action": {{ (action | title if action else '') | tojson }},
-              "acolor": {{ (action_colours.get(action, '170,178,190')) | tojson }},
-              "climate_on": {{ ('1' if climate_entity and cur is not none else '0') | tojson }},
-              "count": {{ (people[:6] | count) | string | tojson }}
-              {%- for r in ns.rows -%}
-              , "p{{ loop.index }}_name": {{ r.name | tojson }},
-                "p{{ loop.index }}_color": {{ r.color | tojson }},
-                "p{{ loop.index }}_time": {{ r.time | tojson }}
+              "stat_count": {{ (stats | count) | string | tojson }}
+              {%- for i in range(4) -%}
+                {%- set s = stats[i] if i < (stats | count) else ('', '', '0,0,0') -%}
+              , "s{{ i + 1 }}_label": {{ (s[0] | string) | tojson }},
+                "s{{ i + 1 }}_value": {{ (s[1] | string) | tojson }},
+                "s{{ i + 1 }}_color": {{ (s[2] | string) | tojson }}
+              {%- endfor %},
+              "chip_count": {{ (chips | count) | string | tojson }}
+              {%- for i in range(6) -%}
+                {%- set c = chips[i] if i < (chips | count) else ('', '0,0,0', '') -%}
+              , "c{{ i + 1 }}_name": {{ (c[0] | string) | tojson }},
+                "c{{ i + 1 }}_color": {{ (c[1] | string) | tojson }},
+                "c{{ i + 1 }}_sub": {{ (c[2] | string) | tojson }}
               {%- endfor %}
             }
 
@@ -131,10 +153,11 @@ automation:
   - id: rainmeter_statusboard_refresh
     alias: "Rainmeter - Refresh status board"
     description: >-
-      Rewrites statusboard.json whenever anything on it changes. The midnight
-      trigger is what clears yesterday's arrival times: the payload template
-      only shows a time if the person came home today, so the board needs one
-      re-render after the date rolls over even if nobody has moved.
+      Rewrites statusboard.json whenever anything on it changes.
+
+      The midnight trigger is what clears yesterday's arrival times: the chip
+      template only shows a time if the person came home today, so the board
+      needs one re-render after the date rolls over even if nobody has moved.
     mode: restart
     triggers:
       - trigger: state
