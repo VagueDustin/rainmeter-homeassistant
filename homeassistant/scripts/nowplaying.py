@@ -64,9 +64,25 @@ ACCENT_LIGHT_MAX = 0.82
 ACCENT_SAT_MIN = 0.45
 
 FALLBACK_RGB = (235, 235, 235)
-COVER_MAX = 640
-COVER_MIN = 288
 FETCH_TIMEOUT = 10
+
+# Default cover size. The skin draws the art at 156px, so 320 is already 2x
+# oversampled - and small matters more than it looks.
+#
+# Rainmeter's WebParser downloads to a FIXED path. If a read stalls part way
+# through, Rainmeter keeps that file handle open indefinitely: the partial file
+# can never be replaced, it stops decoding, and nothing short of restarting
+# Rainmeter clears it. The panel then shows title and artist correctly with a
+# blank square where the art should be.
+#
+# That is not hypothetical - it happened on a Wi-Fi-connected machine once the
+# covers grew past half a megabyte, wedging at 192 KB of a 289 KB transfer.
+# A tenth of the bytes is a tenth of the exposure. Raise --cover-max if you
+# scale the skin up, but know what you are trading.
+COVER_MAX_DEFAULT = 320
+# 256 colours is visually indistinguishable at this size and roughly halves the
+# file again.
+COVER_COLOURS = 256
 
 
 def b64arg(value: str) -> str:
@@ -142,6 +158,13 @@ def main() -> int:
     ap.add_argument("--album-b64", default="")
     ap.add_argument("--source-b64", default="", help="friendly name of the player")
     ap.add_argument("--state", default="unknown")
+    ap.add_argument(
+        "--cover-max",
+        type=int,
+        default=COVER_MAX_DEFAULT,
+        help="longest edge of the published cover in px (default %d). See the "
+        "comment by COVER_MAX_DEFAULT before raising it." % COVER_MAX_DEFAULT,
+    )
     args = ap.parse_args()
 
     title = b64arg(args.title_b64)
@@ -218,12 +241,15 @@ def main() -> int:
             hex="#%02x%02x%02x" % accent,
             rgb_rm="%d,%d,%d" % accent,
         )
-        # Square, never upscaled past the source, never below the skin's art
-        # box. Consumers downscale cleanly; upscaling just wastes bandwidth.
-        side = max(COVER_MIN, min(COVER_MAX, min(img.size)))
+        # Square, and never upscaled: enlarging a small cover adds no detail,
+        # it only adds bytes for the download to stall on. Rainmeter scales it
+        # to the art box either way.
+        side = min(args.cover_max, min(img.size))
         square = ImageOps.fit(img, (side, side), Image.LANCZOS, centering=(0.5, 0.5))
         buf = io.BytesIO()
-        square.save(buf, "PNG")
+        square.convert("P", palette=Image.ADAPTIVE, colors=COVER_COLOURS).save(
+            buf, "PNG", optimize=True
+        )
         write_atomic(cover_path, buf.getvalue())
         payload["art"] = "ok"
         payload["cover_url"] = "%s/local/%s?v=%s" % (

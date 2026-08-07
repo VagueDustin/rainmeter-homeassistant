@@ -23,6 +23,36 @@ Check in this order:
   URL resolves. The refresh automation re-runs on a ladder for exactly this; add
   another step or two to `for_each`.
 
+## The art disappears and never comes back (title and artist still fine)
+
+The giveaway is that everything *except* the image is correct — title, artist,
+and the accent colour are all live, so the JSON is being fetched and parsed.
+Only the picture is missing.
+
+Rainmeter's WebParser downloads to a **fixed path**. If a read stalls part way
+through, Rainmeter keeps that file handle open indefinitely. The partial file
+can never be replaced, it stops decoding, and it does not recover on its own —
+not on a track change, not on a skin refresh, not on `!DeactivateConfig`. Only
+restarting Rainmeter releases it.
+
+To confirm, look in the skin's `DownloadFile\` folder:
+
+- the file is smaller than the one Home Assistant is serving, often at a round
+  boundary such as 192 KB
+- it is locked — trying to read or delete it reports the file in use
+- opening it in an image viewer fails (GDI+ reports a corrupt image as the
+  distinctly unhelpful "Out of memory")
+
+**To recover:** quit Rainmeter fully, delete the file in `DownloadFile\`, and
+start Rainmeter again.
+
+**To stop it recurring:** make the transfer smaller. `nowplaying.py` publishes a
+320px cover by default for exactly this reason — the skin only draws it at
+156px, so anything larger is bytes you are exposed on for no visible gain. If
+you raised `--cover-max`, lower it again. This bites hardest on a machine
+connected over Wi-Fi, which is where it was first seen: covers grew past half a
+megabyte and one wedged at 192 KB of a 289 KB transfer.
+
 ## Weird characters instead of a degree sign
 
 `Ã‚Â°` or similar means a `.ini` picked up non-ASCII. Rainmeter reads a `.ini`
