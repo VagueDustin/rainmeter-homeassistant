@@ -144,6 +144,7 @@ command_line:
         python3 /config/rainmeter/write_json.py
         --www /config/www
         --out statusboard.json
+        --stamp ts
         --b64 "{{ state_attr('sensor.rainmeter_status_board_payload', 'payload') | base64_encode }}"
       scan_interval: 21600
       command_timeout: 15
@@ -166,6 +167,11 @@ automation:
         at: "00:00:01"
       - trigger: homeassistant
         event: start
+      # Heartbeat: keeps the write-time stamp (--stamp ts) advancing even when
+      # nothing on the board changes, so the skin can tell "quiet" from "dead"
+      # and grey itself out instead of showing stale data as current.
+      - trigger: time_pattern
+        minutes: /5
     conditions: []
     actions:
       - action: homeassistant.update_entity

@@ -74,6 +74,8 @@ Full detail, including how to check each stage independently, is in [docs/instal
 
 Both skins keep their tunables in a `[Variables]` block at the top: panel width and height, corner radius, colours, margins, font. The now-playing panel auto-sizes its width to the longer of the two text lines between a floor and a ceiling you set, so long titles do not clip and short ones do not leave a gulf of empty panel.
 
+**Staleness guard (status board, 1.3.0).** A skin that polls a file has a quiet failure mode: if the pipeline dies — HA down, a firewall change, Wi-Fi drop — the last payload stays on screen looking current, and yesterday's presence board reads as today's. So the writer now stamps a write-time epoch into the JSON (`write_json.py --stamp ts`), the package re-renders at least every 5 minutes as a heartbeat, and the skin compares that stamp against the clock: if it stops advancing for `StaleSecs` (default 15 minutes), the data rows hide and a `NO LINK - LIVE DATA PAUSED` notice shows until the feed recovers. The clock and date are machine-local and keep ticking throughout. One regex subtlety worth stealing for your own skins: under WebParser's ungreedy `(?U)` flag, `(\d+)` captures a *single digit* — the epoch capture is anchored to the closing brace (`"ts":\s*(\d+)\}`) to force the full number.
+
 The status board additionally has:
 
 - `Position` — where it sits along the top edge: `0` left, `1` centre (default), `2` right, always with `Margin` padding on both axes.

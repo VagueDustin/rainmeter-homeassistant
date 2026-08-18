@@ -29,6 +29,7 @@ import base64
 import json
 import os
 import sys
+import time
 
 
 def main() -> int:
@@ -36,6 +37,16 @@ def main() -> int:
     ap.add_argument("--www", default="/config/www", help="HA www folder")
     ap.add_argument("--out", required=True, help="output filename, e.g. statusboard.json")
     ap.add_argument("--b64", required=True, help="base64 of the JSON document")
+    ap.add_argument(
+        "--stamp",
+        metavar="KEY",
+        help=(
+            "add KEY: <unix epoch> as the LAST top-level field - a write-time "
+            "heartbeat consumers can use to detect a dead pipeline. Lives here "
+            "rather than in the template because now() in a template payload "
+            "re-renders every minute and churns the refresh automation."
+        ),
+    )
     args = ap.parse_args()
 
     # Never let --out escape www: it is templated from HA config, but a
@@ -59,6 +70,15 @@ def main() -> int:
         lo = max(0, err.pos - 60)
         sys.stderr.write(f"payload is not valid JSON: {err}\n  near: {text[lo:err.pos + 60]!r}\n")
         return 2
+
+    if args.stamp:
+        if not isinstance(parsed, dict):
+            sys.stderr.write("--stamp needs a JSON object at the top level\n")
+            return 2
+        # dict insertion order survives json.dump, so the stamp lands last -
+        # which matters to Rainmeter's ordered-capture RegExp consumers.
+        parsed.pop(args.stamp, None)
+        parsed[args.stamp] = int(time.time())
 
     path = os.path.join(args.www, name)
     tmp = path + ".tmp"
