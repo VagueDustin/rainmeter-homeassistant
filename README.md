@@ -6,11 +6,11 @@ Two Rainmeter skins driven by Home Assistant, with no access token stored on the
 
 ![HA Now Playing](screenshots/nowplaying.png)
 
-**HA Status Board** — a clock with two configurable rows underneath: up to 4 **stats** (a label over a value) and up to 6 **chips** (a coloured name over a sub-line). Nothing in the skin knows what a thermostat is — the screenshot below happens to show temperature, HVAC, setpoint and power draw over three people, a door and a printer, but every slot is just a string you build in YAML. Empty slots hide themselves, empty rows collapse, and the panel height follows.
+**HA Status Board** — a clock with two configurable rows underneath: up to 4 **stats** (a label over a value) and up to 6 **chips** (a coloured name over a sub-line). Nothing in the skin knows what a thermostat is — the screenshot below happens to show temperature, HVAC, setpoint and power draw over three people, a door and a printer, but every slot is just a string you build in YAML. Empty slots hide themselves, empty rows collapse, and the panel height follows. Set `Panel=0` and the panel disappears entirely: the text floats straight on the wallpaper, carried by a three-layer text shadow tuned to stay readable even on bright backdrops.
 
 ![HA Status Board](screenshots/statusboard.png)
 
-They are designed to share a screen — same panel fill, corner radius and shadowed text — and to place themselves at the bottom-left and top-centre of any resolution without hardcoded coordinates. Both panels are translucent, so the wallpaper showing through the screenshots above is just a desktop, not part of the skin.
+They are designed to share a screen — same panel fill, corner radius and shadowed text — and to place themselves without hardcoded coordinates at any resolution: the now-playing panel sits bottom-left, and the status board picks its spot along the top edge with a `Position` variable (left, centre or right). Both panels are translucent, so the wallpaper showing through the screenshots above is just a desktop, not part of the skin.
 
 
 ## Why it works this way
@@ -73,6 +73,12 @@ Full detail, including how to check each stage independently, is in [docs/instal
 ## Customising
 
 Both skins keep their tunables in a `[Variables]` block at the top: panel width and height, corner radius, colours, margins, font. The now-playing panel auto-sizes its width to the longer of the two text lines between a floor and a ceiling you set, so long titles do not clip and short ones do not leave a gulf of empty panel.
+
+The status board additionally has:
+
+- `Position` — where it sits along the top edge: `0` left, `1` centre (default), `2` right, always with `Margin` padding on both axes.
+- `Panel` — `1` (default) for the classic rounded panel; `0` removes the panel *and* its divider, leaving text floating directly on the wallpaper.
+- `Shadow` — one colour driving all three shadow layers under every string (a soft drop, a mid halo, and a tight rim around the letterforms). The default suits most wallpapers; push the alpha to `255` for very bright or busy ones. With no panel, the skin keeps an invisible full-size shape behind everything — without it the window shrinks to the text and its edge slices the shadow blur into a hard line, so don't delete `[MeterCanvas]`.
 
 Two things worth knowing before you edit:
 
