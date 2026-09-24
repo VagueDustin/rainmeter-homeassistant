@@ -10,14 +10,14 @@ is unreachable, or the regex did not match.
 Check in this order:
 
 1. Open `http://<your-ha>:8123/local/nowplaying.json` **from the Rainmeter PC**.
-   Not from your laptop — the point is whether that machine can reach it.
+   Not from your laptop; the point is whether that machine can reach it.
 2. Check `HA=` in the `.ini` matches that URL exactly, including port.
 3. In Rainmeter, right-click the skin → **Manage skin** and look at the log.
 
 ## The text renders but the artwork does not
 
 - `"art": "ok"` in the JSON but no image: Rainmeter downloaded nothing. Check
-  `cover_url` in the JSON is an address the *desktop* can reach — if it says
+  `cover_url` in the JSON is an address the *desktop* can reach. If it says
   `127.0.0.1`, you set `--ha-base` wrong on the HA side.
 - The art is a track behind: your source announces the title before the artwork
   URL resolves. The refresh automation re-runs on a ladder for exactly this; add
@@ -25,21 +25,21 @@ Check in this order:
 
 ## The art disappears and never comes back (title and artist still fine)
 
-The giveaway is that everything *except* the image is correct — title, artist,
+The giveaway is that everything *except* the image is correct: title, artist,
 and the accent colour are all live, so the JSON is being fetched and parsed.
 Only the picture is missing.
 
 Rainmeter's WebParser downloads to a **fixed path**. If a read stalls part way
 through, Rainmeter keeps that file handle open indefinitely. The partial file
-can never be replaced, it stops decoding, and it does not recover on its own —
-not on a track change, not on a skin refresh, not on `!DeactivateConfig`. Only
+can never be replaced, it stops decoding, and it does not recover on its own.
+A track change, a skin refresh and `!DeactivateConfig` all leave it stuck. Only
 restarting Rainmeter releases it.
 
 To confirm, look in the skin's `DownloadFile\` folder:
 
 - the file is smaller than the one Home Assistant is serving, often at a round
   boundary such as 192 KB
-- it is locked — trying to read or delete it reports the file in use
+- it is locked: trying to read or delete it reports the file in use
 - opening it in an image viewer fails (GDI+ reports a corrupt image as the
   distinctly unhelpful "Out of memory")
 
@@ -47,7 +47,7 @@ To confirm, look in the skin's `DownloadFile\` folder:
 start Rainmeter again.
 
 **To stop it recurring:** make the transfer smaller. `nowplaying.py` publishes a
-320px cover by default for exactly this reason — the skin only draws it at
+320px cover by default for exactly this reason: the skin only draws it at
 156px, so anything larger is bytes you are exposed on for no visible gain. If
 you raised `--cover-max`, lower it again. This bites hardest on a machine
 connected over Wi-Fi, which is where it was first seen: covers grew past half a
@@ -56,15 +56,15 @@ megabyte and one wedged at 192 KB of a 289 KB transfer.
 ## Weird characters instead of a degree sign
 
 `Ã‚Â°` or similar means a `.ini` picked up non-ASCII. Rainmeter reads a `.ini`
-with no BOM as ANSI. Either save the file as UTF-16 LE **with** a BOM, or —
-better — keep the `.ini` ASCII and move the symbol into the JSON, which is what
+with no BOM as ANSI. Either save the file as UTF-16 LE **with** a BOM or,
+better, keep the `.ini` ASCII and move the symbol into the JSON, which is what
 this project does. Change the unit in the YAML, not the skin.
 
 ## Descenders are sliced off (the tail of g, y or p)
 
 `ClipString=2` clips to **both** W and H, so a clip box shorter than the font's
 full line box cuts the bottoms off. A point is 1.333 px, so a 22pt line box is
-about 35px - a box of 34 looks right until a word with a descender comes along.
+about 35px; a box of 34 looks right until a word with a descender comes along.
 
 The skin derives each line's height from its font size (`H=(#TitleSize#*2)`)
 so this cannot come back. If you change `TitleSize` or `ArtistSize`, leave the
@@ -88,13 +88,13 @@ At a 1-second update rate you will not notice; at a much slower rate you will.
 
 `count` in the JSON drives how many slots are drawn and how they are spaced.
 Slots past the count hide themselves. If someone is missing, check they are
-inside the first six entries of `people` and that the entity id is right — a
+inside the first six entries of `people` and that the entity id is right. A
 typo produces an entity that never matches `home_states`, which renders as
 present-but-away rather than as an error.
 
 ## Arrival times show from yesterday
 
-They should not — the template only emits a time if `last_changed` is today.
+They should not: the template only emits a time if `last_changed` is today.
 If you see a stale one, the board has not re-rendered since midnight; confirm
 the `00:00:01` trigger in the refresh automation still exists.
 

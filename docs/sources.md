@@ -18,7 +18,7 @@ knowing, not a list of what is supported.
 ## The default: whatever is playing
 
 Out of the box the picker walks every `media_player`, skips an exclude list, and
-takes the first one that is `playing` — falling back to the first `paused` one so
+takes the first one that is `playing`, falling back to the first `paused` one so
 the panel does not vanish the moment you hit pause. Entities with no
 `media_title` are ignored, which quietly filters out idle speakers, TVs showing
 an input, and group members that mirror a parent.
@@ -28,7 +28,7 @@ the panel in `exclude`.
 
 ## Pinning a priority order
 
-If two things can play at once — a desk speaker and a whole-home group, say —
+If two things can play at once (a desk speaker and a whole-home group, say),
 give the picker an explicit list instead, and the first match in *your* order
 wins:
 
@@ -52,7 +52,7 @@ Works with no special handling. Two notes:
 ## Spotify
 
 `entity_picture` is an **absolute** `https://i.scdn.co/...` URL rather than an
-HA-proxied path. The script handles both — it only prefixes `--ha-base` when the
+HA-proxied path. The script handles both: it only prefixes `--ha-base` when the
 value starts with `/`. Your HA box does need outbound internet to fetch the
 artwork, which is otherwise not a given on a locked-down VLAN.
 
@@ -73,7 +73,7 @@ and p.attributes.get('media_content_type') in ['music', 'track']
 ## AirPlay receivers and other fixed-path artwork
 
 Some devices serve *every* cover from one unchanging URL. Nothing keyed off the
-URL alone can detect a change there — which is exactly why `nowplaying.py`
+URL alone can detect a change there, which is exactly why `nowplaying.py`
 derives its cache-buster from a hash of the image **bytes**. It re-downloads on
 every refresh and only changes `?v=` when the image really differs, so Rainmeter
 picks up the new art and does not re-fetch when nothing happened.
@@ -104,7 +104,7 @@ The board has two rows and neither is tied to any particular kind of entity.
 ('UPTIME', states('sensor.server_uptime'),                  MUTED)
 ```
 
-**Chips** are `(name, colour, sub-line)` — a coloured word with something small underneath. Good for anything with a state worth glancing at:
+**Chips** are `(name, colour, sub-line)`: a coloured word with something small underneath. Good for anything with a state worth glancing at:
 
 ```jinja
 ('DOOR',    GREEN if is_state('binary_sensor.front','off') else RED,
@@ -129,15 +129,15 @@ The status board's people list takes any entity whose state is one of
 `home_states` (default `home`, `on`, `true`). The arrival time is that entity's
 `last_changed`, shown only if it happened today.
 
-- **`person.*`** — the natural fit, and what the example uses.
-- **`device_tracker.*`** — same shape; noisier, since Wi-Fi trackers flap.
-- **`binary_sensor.*` / `input_boolean.*`** — for a badge reader, a desk sensor,
+- **`person.*`**: the natural fit, and what the example uses.
+- **`device_tracker.*`**: same shape; noisier, since Wi-Fi trackers flap.
+- **`binary_sensor.*` / `input_boolean.*`**: for a badge reader, a desk sensor,
   or a manual toggle.
 
 ## Using an automation's last_triggered instead
 
-If "arrived" means "this automation fired" rather than "this person is home" —
-a door contact, a badge scan, a specific arrival routine — swap the per-person
+If "arrived" means "this automation fired" rather than "this person is home"
+(a door contact, a badge scan, a specific arrival routine), swap the per-person
 lookup for the automation's `last_triggered`:
 
 ```jinja
