@@ -39,6 +39,9 @@ homeassistant/
 skins/
   HANowPlaying/                the now-playing panel
   HAStatusBoard/               the clock / climate / presence panel
+kde/
+  local.ha.nowplaying/         KDE Plasma 6 port of the now-playing panel
+  local.ha.statusboard/        KDE Plasma 6 port of the status board
 docs/
   install.md                   step-by-step setup
   sources.md                   per-integration notes for the music sources
@@ -62,6 +65,8 @@ That is what makes the status board general. A slot is a `(label, value, colour)
 5. Copy `skins/HANowPlaying` and `skins/HAStatusBoard` into `Documents\Rainmeter\Skins\`, set `HA=` at the top of each `.ini` to the same URL, and load them.
 
 Full detail, including how to check each stage independently, is in [docs/install.md](docs/install.md).
+
+**On Linux with KDE Plasma 6?** Do steps 1 to 4, then install the native widgets in `kde/` instead of the Rainmeter skins. See [kde/README.md](kde/README.md).
 
 ## Requirements
 
@@ -90,6 +95,6 @@ A few things to know before you edit:
 
 ## Credits
 
-Built for a projector-mounted office dashboard, then generalised. MIT licensed. See [LICENSE](LICENSE).
+Built for a projector-mounted office dashboard, then generalised. KDE Plasma 6 port by Jason Huang. MIT licensed. See [LICENSE](LICENSE).
 
 Screenshots use demonstration data.

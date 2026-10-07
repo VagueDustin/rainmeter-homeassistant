@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Id": "local.ha.statusboard",
+        "Name": "HA Status Board",
+        "Description": "A clock plus two configurable rows of Home Assistant data (up to 4 stats and 6 chips), all defined in YAML. Port of the Rainmeter skin by Dustin Szabo.",
+        "Icon": "view-dashboard",
+        "Authors": [
+            { "Name": "Dustin Szabo (original Rainmeter skin)" },
+            { "Name": "Jason Huang (KDE Plasma port)" }
+        ],
+        "Category": "Date and Time",
+        "License": "MIT",
+        "Version": "1.3.0",
+        "Website": "https://github.com/VagueDustin/rainmeter-homeassistant"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
