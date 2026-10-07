@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Id": "local.ha.nowplaying",
+        "Name": "HA Now Playing",
+        "Description": "Album art, title and an accent-tinted artist line for whatever is playing in Home Assistant. Port of the Rainmeter skin by Dustin Szabo.",
+        "Icon": "media-playback-start",
+        "Authors": [
+            { "Name": "Dustin Szabo (original Rainmeter skin)" },
+            { "Name": "Jason Huang (KDE Plasma port)" }
+        ],
+        "Category": "Multimedia",
+        "License": "MIT",
+        "Version": "1.0.1",
+        "Website": "https://github.com/VagueDustin/rainmeter-homeassistant"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

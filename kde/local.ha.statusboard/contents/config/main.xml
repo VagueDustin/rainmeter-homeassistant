@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+    <entry name="haUrl" type="String"><default>http://homeassistant.local:8123</default></entry>
+    <entry name="pollSeconds" type="Int"><default>15</default></entry>
+    <entry name="staleSecs" type="Int"><default>900</default></entry>
+    <entry name="clockFormat" type="String"><default>h:mm AP</default></entry>
+    <entry name="dateFormat" type="String"><default>dddd, MMMM d, yyyy</default></entry>
+    <!-- 0 = left, 1 = centre, 2 = right, inside the widget's area -->
+    <entry name="position" type="Int"><default>1</default></entry>
+    <entry name="panelWidth" type="Int"><default>680</default></entry>
+    <entry name="showPanel" type="Bool"><default>true</default></entry>
+    <entry name="radius" type="Int"><default>12</default></entry>
+    <entry name="fontFamily" type="String"><default>Roboto</default></entry>
+    <entry name="panelColor" type="String"><default>#6e202020</default></entry>
+    <entry name="mutedColor" type="String"><default>#aab2be</default></entry>
+    <entry name="shadowColor" type="String"><default>#eb000000</default></entry>
+  </group>
+</kcfg>
