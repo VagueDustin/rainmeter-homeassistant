@@ -39,6 +39,8 @@ homeassistant/
 skins/
   HANowPlaying/                the now-playing panel
   HAStatusBoard/               the clock / climate / presence panel
+tests/
+  test_accent.py               self-check for the accent picker, on generated images
 docs/
   install.md                   step-by-step setup
   sources.md                   per-integration notes for the music sources
@@ -73,6 +75,8 @@ Full detail, including how to check each stage independently, is in [docs/instal
 ## Customising
 
 Both skins keep their tunables in a `[Variables]` block at the top: panel width and height, corner radius, colours, margins, font. The now-playing panel auto-sizes its width to the longer of the two text lines between a floor and a ceiling you set, so long titles do not clip and short ones do not leave a gulf of empty panel.
+
+**Accent picker (now playing, 1.1.0).** The artist line's colour used to come from quantising the cover to 12 colours and scoring them by HLS saturation. HLS calls near-black colours fully saturated (`#020001` scores 1.0), so on dark art a speck of black could win and be lifted into a neon tint: a black-and-red cover came out hot pink. `nowplaying.py` now builds a hue histogram over the cover's pixels, each weighted by chroma squared, so black, white and grey count for nothing and vivid pixels dominate. The peak hue wins, and the colour is the average of the pixels near it. A cover with almost no colour gets a light grey that keeps its warm or cool lean, not an invented hue. Small vivid accents on a dark field now survive too, where quantising used to average them away. The JSON is unchanged. `python -m unittest discover -s tests` runs the regression cases on generated images (Pillow only).
 
 **Staleness guard (status board, 1.3.0).** A skin that polls a file has a quiet failure mode: if the pipeline dies — HA down, a firewall change, Wi-Fi drop — the last payload stays on screen looking current, and yesterday's presence board reads as today's. So the writer now stamps a write-time epoch into the JSON (`write_json.py --stamp ts`), the package re-renders at least every 5 minutes as a heartbeat, and the skin compares that stamp against the clock: if it stops advancing for `StaleSecs` (default 15 minutes), the data rows hide and a `NO LINK - LIVE DATA PAUSED` notice shows until the feed recovers. The clock and date are machine-local and keep ticking throughout. One regex subtlety worth stealing for your own skins: under WebParser's ungreedy `(?U)` flag, `(\d+)` captures a *single digit* — the epoch capture is anchored to the closing brace (`"ts":\s*(\d+)\}`) to force the full number.
 

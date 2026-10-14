@@ -12,9 +12,10 @@ two files into `www/`, which HA serves at `/local/` with no authentication:
 Nothing secret ever leaves HA: `/local/` is unauthenticated by design, and
 these two files contain only what is already on screen.
 
-The accent colour is the interesting part. It is picked from the artwork by
-scoring a quantised palette on saturation and mid-lightness, so the skin can
-tint text to match the album without looking washed out. See pick_accent().
+The accent colour is the interesting part. It is picked from the artwork with
+a hue histogram weighted by each pixel's chroma, so the skin can tint text to
+match the album without looking washed out, and dark or colourless covers do
+not get a hue they never had. See pick_accent().
 
 Source-agnostic: it takes whatever entity_picture / title / artist it is
 handed, so Music Assistant, Spotify, Sonos, Cast, Plex, Jellyfin, Squeezebox,
@@ -46,22 +47,35 @@ import colorsys
 import hashlib
 import io
 import json
+import math
 import os
 import sys
 import urllib.request
 
 # --- accent tuning ----------------------------------------------------------
-# Saturation dominates the score, mid-lightness is preferred, and population
-# only breaks ties - otherwise a large flat background always wins and every
-# cover resolves to grey.
-ACCENT_LIGHT_TARGET = 0.55
-ACCENT_LIGHT_SPREAD = 1.2
-ACCENT_POP_WEIGHT = 0.65
+# Per pixel, not per palette entry. The old picker quantised the cover to 12
+# colours and scored them by HLS saturation, which is 1.0 for near-black
+# colours (#020001 scores S=1.00): on dark art a speck of black won and was
+# then lifted into a neon tint (The Witcher 3's black-and-red cover came out
+# hot pink). Quantising also averaged small vivid accents into the dark mass.
+#
+# Instead: a hue histogram over the cover's pixels, each weighted by chroma
+# squared (max-min of RGB, which is 0 for black, white and grey), so vivid
+# pixels dominate and muddy ones barely count. The peak hue wins, and the
+# colour is the weighted average of the pixels near that hue.
+HUE_BINS = 36             # 10 degrees each
+PICK_MIN_CHROMA = 0.18    # below this a pixel is black/white/grey for picking
+PICK_MIN_VALUE = 0.20     # and anything this dark is too
+PICK_MIN_SHARE = 0.006    # under 0.6% chromatic pixels the cover is neutral
+PICK_SPREAD = 1.5         # bins either side of the peak that form the colour
 # Floors, so washed-out art still produces something readable against a dark
 # panel rather than near-black text.
 ACCENT_LIGHT_MIN = 0.58
 ACCENT_LIGHT_MAX = 0.82
 ACCENT_SAT_MIN = 0.45
+# Lightness for covers with no colour worth naming: a light grey that keeps
+# the cover's own warm or cool lean. See neutral_tint().
+ACCENT_LIGHT_NEUTRAL = 0.78
 
 FALLBACK_RGB = (235, 235, 235)
 FETCH_TIMEOUT = 10
@@ -96,31 +110,72 @@ def b64arg(value: str) -> str:
         return ""
 
 
-def pick_accent(img) -> tuple[int, int, int]:
-    """Choose a vibrant, readable accent colour from the artwork."""
+def _pixels(img, side: int = 96) -> list[tuple[float, float, float]]:
     small = img.copy()
-    small.thumbnail((80, 80))
-    quant = small.quantize(colors=12)
-    palette = quant.getpalette() or []
-    counts = quant.getcolors() or []
-    total = sum(c for c, _ in counts) or 1
+    small.thumbnail((side, side))
+    raw = small.tobytes()
+    return [(raw[i] / 255, raw[i + 1] / 255, raw[i + 2] / 255) for i in range(0, len(raw), 3)]
 
-    best, best_score = None, -1.0
-    for count, idx in counts:
-        r, g, b = palette[idx * 3 : idx * 3 + 3]
-        hue, light, sat = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-        score = (sat ** 1.5) * max(
-            0.0, 1 - abs(light - ACCENT_LIGHT_TARGET) * ACCENT_LIGHT_SPREAD
-        )
-        score *= (1 - ACCENT_POP_WEIGHT) + ACCENT_POP_WEIGHT * (count / total)
-        if score > best_score:
-            best_score, best = score, (hue, light, sat)
 
-    if best is None:
-        return FALLBACK_RGB
-    hue, light, sat = best
-    light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
-    sat = max(sat, ACCENT_SAT_MIN)
+def pick_accent(img) -> tuple[float, float, float] | None:
+    """(hue, lightness, saturation) in HLS of the cover's dominant vivid
+    colour, or None when the cover has no colour worth naming."""
+    px = _pixels(img)
+    bins = [0.0] * HUE_BINS
+    samples = []
+    for r, g, b in px:
+        hi, lo = max(r, g, b), min(r, g, b)
+        chroma = hi - lo
+        if chroma < PICK_MIN_CHROMA or hi < PICK_MIN_VALUE:
+            continue
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        w = chroma * chroma
+        bins[int(h * HUE_BINS) % HUE_BINS] += w
+        samples.append((h, s, v, w))
+    if len(samples) < max(12, len(px) * PICK_MIN_SHARE):
+        return None
+
+    # Light smoothing so a hue sitting on a bin edge is not split in two.
+    smooth = [bins[i - 1] * 0.5 + bins[i] + bins[(i + 1) % HUE_BINS] * 0.5 for i in range(HUE_BINS)]
+    peak = (max(range(HUE_BINS), key=smooth.__getitem__) + 0.5) / HUE_BINS
+
+    # Circular mean of the hues near the peak, so a red that straddles 0/360
+    # averages to red rather than to cyan.
+    sx = sy = sw = ss = sv = 0.0
+    for h, s, v, w in samples:
+        d = abs(h - peak)
+        if min(d, 1 - d) <= PICK_SPREAD / HUE_BINS:
+            sx += w * math.cos(2 * math.pi * h)
+            sy += w * math.sin(2 * math.pi * h)
+            sw += w
+            ss += w * s
+            sv += w * v
+    hue = (math.atan2(sy, sx) / (2 * math.pi)) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(hue, ss / sw, sv / sw)
+    return colorsys.rgb_to_hls(r, g, b)
+
+
+def neutral_tint(img) -> tuple[float, float, float]:
+    """HLS of the average of the cover's lit pixels, for art with no colour:
+    keeps whether it leans warm or cool without inventing a hue."""
+    lit = [p for p in _pixels(img) if max(p) >= 0.35] or [(0.8, 0.8, 0.8)]
+    n = len(lit)
+    r, g, b = (sum(p[i] for p in lit) / n for i in range(3))
+    return colorsys.rgb_to_hls(r, g, b)
+
+
+def accent_rgb(img) -> tuple[int, int, int]:
+    """The accent as 0-255 RGB, floored so it reads against a dark panel."""
+    picked = pick_accent(img)
+    if picked is None:
+        # No colour worth naming (black/white/grey art): a light grey carrying
+        # the cover's own tint, rather than a hue the art does not have.
+        hue, _light, sat = neutral_tint(img)
+        light = ACCENT_LIGHT_NEUTRAL
+    else:
+        hue, light, sat = picked
+        light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
+        sat = max(sat, ACCENT_SAT_MIN)
     return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, light, sat))
 
 
@@ -235,7 +290,7 @@ def main() -> int:
         from PIL import ImageOps
 
         img = Image.open(io.BytesIO(data)).convert("RGB")
-        accent = pick_accent(img)
+        accent = accent_rgb(img)
         payload.update(
             rgb=list(accent),
             hex="#%02x%02x%02x" % accent,
