@@ -18,17 +18,20 @@ homeassistant/scripts/write_json.py   generic writer: validates a template-rende
 homeassistant/packages/*.yaml         drop-in HA packages: source picker, command_line sensors, refresh
 skins/HANowPlaying/, skins/HAStatusBoard/   Rainmeter skins (.ini)
 kde/local.ha.nowplaying/, kde/local.ha.statusboard/   Plasma 6 plasmoids (QML)
+tests/test_accent.py                  accent-picker regression cases on generated covers, plus the JSON contract
 docs/install.md, docs/sources.md, docs/troubleshooting.md
 screenshots/                          demonstration data only
 ```
 
 ## Commands
 
-There is no build system, package manifest or test suite. The Python scripts use only the standard
-library plus optional Pillow (artwork and accent extraction; absent = no cover, neutral accent).
+There is no build system or package manifest. The Python scripts use only the standard library plus
+optional Pillow (artwork and accent extraction; absent = no cover, neutral accent). The one test suite
+covers the accent picker and needs Pillow.
 
 ```bash
 python -m py_compile homeassistant/scripts/*.py                  # syntax check
+python -m unittest discover -s tests -v                           # accent picker + JSON contract
 python3 homeassistant/scripts/write_json.py --www <dir> --out statusboard.json --b64 <base64 json>
 kpackagetool6 -t Plasma/Applet -i kde/local.ha.nowplaying       # install a widget (-u to update)
 journalctl --user -b | grep -i local.ha                           # widget logs
