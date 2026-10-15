@@ -42,6 +42,8 @@ skins/
 kde/
   local.ha.nowplaying/         KDE Plasma 6 port of the now-playing panel
   local.ha.statusboard/        KDE Plasma 6 port of the status board
+tests/
+  test_accent.py               accent picker on generated covers: python -m unittest discover -s tests
 docs/
   install.md                   step-by-step setup
   sources.md                   per-integration notes for the music sources
