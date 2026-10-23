@@ -56,6 +56,10 @@ verify.
   WebParser regex anchors the epoch capture to the closing brace because of `(?U)`.
 - The now-playing panel measures text with off-screen "extent probe" meters; a new text line that
   should affect panel width needs its own probe. Don't delete `[MeterCanvas]` in the status board.
+- The KDE widgets draw their glass without sampling the wallpaper (no `ShaderEffectSource` on the
+  containment): that crash-looped plasmashell in the NVIDIA GL driver. Text uses NativeRendering with
+  a 1 px raised shadow, and every size goes through `px()` / `fs()` so **Scale** and **Minimum text
+  size** keep working; don't hardcode pixel sizes.
 - Each panel's version appears in its skin's `[Metadata]` `Version=` and in the matching
   `kde/*/metadata.json`; keep them in step when bumping, and don't bump unless asked.
 - Never commit real entity names, people, addresses, hostnames or screenshots from a real home. The

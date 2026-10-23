@@ -6,7 +6,7 @@ cannot ask it directly without an access token living in a plain-text skin
 file, so this script runs *inside* HA (as a `command_line` sensor) and drops
 two files into `www/`, which HA serves at `/local/` with no authentication:
 
-    <name>.json         title, artist, album, state, source, accent colour
+    <name>.json         title, artist, album, state, source, two accent colours
     <name>_cover.png    the artwork, re-encoded, at a stable path
 
 Nothing secret ever leaves HA: `/local/` is unauthenticated by design, and
@@ -14,7 +14,10 @@ these two files contain only what is already on screen.
 
 The accent colour is the interesting part. It is picked from the artwork's
 pixels by a hue histogram weighted toward vivid colour, so the skin can tint
-text to match the album without looking washed out. See pick_accent().
+text to match the album without looking washed out. A second colour (rgb2 /
+hex2 / rgb2_rm) is the cover's next distinct hue, or its neutral tone when the
+cover has only one colour, for a second line or a two-colour design. See
+pick_accents().
 
 Source-agnostic: it takes whatever entity_picture / title / artist it is
 handed, so Music Assistant, Spotify, Sonos, Cast, Plex, Jellyfin, Squeezebox,
@@ -72,6 +75,14 @@ ACCENT_SPREAD = 1.5             # bins either side of the peak that form the col
 ACCENT_LIGHT_MIN = 0.58
 ACCENT_LIGHT_MAX = 0.82
 ACCENT_SAT_MIN = 0.45
+# The second colour: a separate hue peak at least 40 degrees from the first,
+# carrying at least 4% of its weight and 0.3% of the pixels. Otherwise the cover
+# is one colour, and the second is its neutral tone (the average of its lit,
+# low-chroma pixels) at a fixed light level, so it still leans warm or cool.
+SECOND_MIN_APART = 4            # bins
+SECOND_MIN_RATIO = 0.04
+SECOND_MIN_SHARE = 0.003
+SECOND_NEUTRAL_LIGHT = 0.78
 
 FALLBACK_RGB = (235, 235, 235)
 FETCH_TIMEOUT = 10
@@ -106,15 +117,63 @@ def b64arg(value: str) -> str:
         return ""
 
 
-def pick_accent(img) -> tuple[int, int, int]:
-    """Choose a vibrant, readable accent colour from the artwork.
+def _floored(hue: float, sat: float, val: float) -> tuple[int, int, int]:
+    """An HSV colour lifted to the readability floors, as 0-255 RGB."""
+    _, light, s = colorsys.rgb_to_hls(*colorsys.hsv_to_rgb(hue, sat, val))
+    light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
+    s = max(s, ACCENT_SAT_MIN)
+    return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, light, s))
 
-    Neutral art (black, white, grey, sepia) has no hue worth tinting with, so
-    it gets FALLBACK_RGB rather than an invented colour.
+
+def _near(samples, centre: float, n: int):
+    """The samples within ACCENT_SPREAD bins of hue `centre`."""
+    out = []
+    for sample in samples:
+        d = abs(sample[0] - centre)
+        if min(d, 1 - d) <= ACCENT_SPREAD / n:
+            out.append(sample)
+    return out
+
+
+def _average(samples) -> tuple[float, float, float]:
+    """Weighted HSV average, with the hue averaged on the circle."""
+    sx = sy = sw = ss = sv = 0.0
+    for h, s, v, w in samples:
+        sx += w * math.cos(2 * math.pi * h)
+        sy += w * math.sin(2 * math.pi * h)
+        sw += w
+        ss += w * s
+        sv += w * v
+    return (math.atan2(sy, sx) / (2 * math.pi)) % 1.0, ss / sw, sv / sw
+
+
+def _neutral_tone(raw: bytes) -> tuple[int, int, int]:
+    """The cover's lit, low-chroma pixels averaged, at SECOND_NEUTRAL_LIGHT."""
+    lit = []
+    for i in range(0, len(raw), 3):
+        r, g, b = raw[i] / 255, raw[i + 1] / 255, raw[i + 2] / 255
+        if max(r, g, b) >= 0.35 and max(r, g, b) - min(r, g, b) < ACCENT_MIN_CHROMA:
+            lit.append((r, g, b))
+    if not lit:
+        return FALLBACK_RGB
+    r, g, b = (sum(p[i] for p in lit) / len(lit) for i in range(3))
+    hue, _, sat = colorsys.rgb_to_hls(r, g, b)
+    return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, SECOND_NEUTRAL_LIGHT, sat))
+
+
+def pick_accents(img) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Choose two readable accent colours from the artwork.
+
+    The first is the dominant vivid colour. The second is the strongest other
+    hue at least SECOND_MIN_APART bins away; a one-colour cover gets its neutral
+    tone instead. Neutral art (black, white, grey, sepia) has no hue worth
+    tinting with, so its first colour is FALLBACK_RGB rather than an invented
+    one.
     """
     small = img.copy()
     small.thumbnail((96, 96))
     raw = small.tobytes()
+    pixels = len(raw) // 3
     bins = [0.0] * ACCENT_HUE_BINS
     samples = []
     for i in range(0, len(raw), 3):
@@ -127,28 +186,31 @@ def pick_accent(img) -> tuple[int, int, int]:
         w = chroma * chroma
         bins[int(h * ACCENT_HUE_BINS) % ACCENT_HUE_BINS] += w
         samples.append((h, s, v, w))
-    if len(samples) < max(12, (len(raw) // 3) * ACCENT_MIN_SHARE):
-        return FALLBACK_RGB
+    if len(samples) < max(12, pixels * ACCENT_MIN_SHARE):
+        return FALLBACK_RGB, _neutral_tone(raw)
 
     # Light smoothing so a hue sitting on a bin edge is not split in two.
     n = ACCENT_HUE_BINS
     smooth = [bins[i - 1] * 0.5 + bins[i] + bins[(i + 1) % n] * 0.5 for i in range(n)]
-    peak = (max(range(n), key=smooth.__getitem__) + 0.5) / n
+    first = max(range(n), key=smooth.__getitem__)
+    primary = _floored(*_average(_near(samples, (first + 0.5) / n, n)))
 
-    sx = sy = sw = ss = sv = 0.0
-    for h, s, v, w in samples:
-        d = abs(h - peak)
-        if min(d, 1 - d) <= ACCENT_SPREAD / n:
-            sx += w * math.cos(2 * math.pi * h)
-            sy += w * math.sin(2 * math.pi * h)
-            sw += w
-            ss += w * s
-            sv += w * v
-    hue = (math.atan2(sy, sx) / (2 * math.pi)) % 1.0
-    _, light, sat = colorsys.rgb_to_hls(*colorsys.hsv_to_rgb(hue, ss / sw, sv / sw))
-    light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
-    sat = max(sat, ACCENT_SAT_MIN)
-    return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, light, sat))
+    def apart(i: int) -> bool:
+        d = abs(i - first)
+        return min(d, n - d) >= SECOND_MIN_APART
+
+    rest = [i for i in range(n) if apart(i)]
+    second = max(rest, key=smooth.__getitem__) if rest else None
+    if second is not None and smooth[second] >= smooth[first] * SECOND_MIN_RATIO:
+        near = _near(samples, (second + 0.5) / n, n)
+        if len(near) >= max(6, pixels * SECOND_MIN_SHARE):
+            return primary, _floored(*_average(near))
+    return primary, _neutral_tone(raw)
+
+
+def pick_accent(img) -> tuple[int, int, int]:
+    """The first accent colour only; see pick_accents()."""
+    return pick_accents(img)[0]
 
 
 def fetch(url: str) -> bytes:
@@ -216,6 +278,11 @@ def main() -> int:
         # Rainmeter's FontColor wants bare "r,g,b" - handing it a preformatted
         # string keeps arithmetic out of the skin.
         "rgb_rm": "%d,%d,%d" % FALLBACK_RGB,
+        # The second accent (pick_accents): the cover's next distinct hue, or
+        # its neutral tone. Same shapes as the first.
+        "rgb2": list(FALLBACK_RGB),
+        "hex2": "#%02x%02x%02x" % FALLBACK_RGB,
+        "rgb2_rm": "%d,%d,%d" % FALLBACK_RGB,
         "cover_url": "",
     }
 
@@ -262,11 +329,14 @@ def main() -> int:
         from PIL import ImageOps
 
         img = Image.open(io.BytesIO(data)).convert("RGB")
-        accent = pick_accent(img)
+        accent, accent2 = pick_accents(img)
         payload.update(
             rgb=list(accent),
             hex="#%02x%02x%02x" % accent,
             rgb_rm="%d,%d,%d" % accent,
+            rgb2=list(accent2),
+            hex2="#%02x%02x%02x" % accent2,
+            rgb2_rm="%d,%d,%d" % accent2,
         )
         # Square, and never upscaled: enlarging a small cover adds no detail,
         # it only adds bytes for the download to stall on. Rainmeter scales it
