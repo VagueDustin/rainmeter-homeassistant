@@ -80,7 +80,12 @@ import urllib.request
 ACCENT_K = 16                   # k-means clusters before merging
 ACCENT_ITER = 12
 ACCENT_MIN_CHROMA = 0.045       # Oklab chroma; below this a pixel is neutral
-ACCENT_MIN_L = 0.22             # Oklab lightness; below this it is too dark to name
+ACCENT_MIN_L = 0.30             # Oklab lightness; below this it is too dark to name
+# ...unless nothing on the cover clears it: then a second look at this, so deep
+# blues and purples (navy is ~0.25) are named instead of falling back to
+# neutral. Not the main cut: lower, the darker pixels reshape the clusters and
+# a teal beside a blue can merge into it.
+ACCENT_MIN_L_DARK = 0.22
 ACCENT_MERGE_HUE = 30           # degrees; closer clusters are one colour
 ACCENT_BLOB_SHARE = 0.0009      # smaller connected bits are specks
 ACCENT_BLOB_MIN_PX = 8
@@ -194,7 +199,7 @@ def _in_big_blobs(label, w, h, blob_min):
     return keep
 
 
-def _pick_accents_py(img):
+def _pick_accents_py(img, min_l=ACCENT_MIN_L):
     """pick_accents without numpy: the same method in plain Python, on an
     ACCENT_SIDE thumbnail to keep it to a few seconds."""
     import random
@@ -208,7 +213,7 @@ def _pick_accents_py(img):
     pts = []
     for i in range(n):
         L, a, b = _to_oklab(raw[3 * i] / 255, raw[3 * i + 1] / 255, raw[3 * i + 2] / 255)
-        if L >= ACCENT_MIN_L and math.hypot(a, b) >= ACCENT_MIN_CHROMA:
+        if L >= min_l and math.hypot(a, b) >= ACCENT_MIN_CHROMA:
             labs[i] = (L, a, b)
             pts.append(i)
     blob_min = max(ACCENT_BLOB_MIN_PX, int(round(n * ACCENT_BLOB_SHARE)))
@@ -303,9 +308,19 @@ def pick_accents(img):
     plain Python on an ACCENT_SIDE thumbnail."""
     try:
         import numpy as np
+
+        def pick(min_l):
+            return _pick_accents_np(img, np, min_l)
     except ImportError:
-        return _pick_accents_py(img)
-    return _pick_accents_np(img, np)
+        def pick(min_l):
+            return _pick_accents_py(img, min_l)
+    # A second look at ACCENT_MIN_L_DARK only when the first finds no colour
+    # at all, so deep navy and purple covers are still named while brighter
+    # covers keep the colours the normal cut gives them.
+    found = pick(ACCENT_MIN_L)
+    if found[0] is None:
+        found = pick(ACCENT_MIN_L_DARK)
+    return found
 
 
 # sRGB -> linear light for every 8-bit value, built once: a table lookup is
@@ -313,7 +328,7 @@ def pick_accents(img):
 _LINEAR = None
 
 
-def _pick_accents_np(img, np):
+def _pick_accents_np(img, np, min_l=ACCENT_MIN_L):
     global _LINEAR
     rgb8 = np.asarray(img.convert("RGB"))
     h, w, _ = rgb8.shape
@@ -331,7 +346,7 @@ def _pick_accents_np(img, np):
                           [0.7936177850, -2.4285922050, 0.7827717662],
                           [-0.0040720468, 0.4505937099, -0.8086757660]])
     chroma = np.hypot(lab[..., 1], lab[..., 2])
-    mask = (lab[..., 0] >= ACCENT_MIN_L) & (chroma >= ACCENT_MIN_CHROMA)
+    mask = (lab[..., 0] >= min_l) & (chroma >= ACCENT_MIN_CHROMA)
     blob_min = max(ACCENT_BLOB_MIN_PX, int(round(n * ACCENT_BLOB_SHARE)))
     if mask.sum() < max(blob_min, n * ACCENT_MIN_SHARE):
         return None, None, None
