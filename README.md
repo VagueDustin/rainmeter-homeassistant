@@ -73,7 +73,7 @@ Full detail, including how to check each stage independently, is in [docs/instal
 ## Requirements
 
 - Home Assistant with the `www/` folder served at `/local/` (the default) and `command_line` available
-- Pillow on the HA box for artwork and accent extraction (already in the official container). Without it the metadata still works; you just get no cover and a neutral accent colour.
+- Pillow on the HA box for artwork and accent extraction (already in the official container). Without it the metadata still works; you just get no cover and a neutral accent colour. numpy, also in the official container, lets the accent picker work on the whole cover in about a second; without it the same picker runs in plain Python on a small thumbnail.
 - Rainmeter 4.5+
 - The Roboto font, or change `Font=` in the skins to something you have
 
