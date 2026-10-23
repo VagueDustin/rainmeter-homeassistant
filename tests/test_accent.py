@@ -41,6 +41,15 @@ def hue_dist(a: float, b: float) -> float:
     return min(d, 360 - d)
 
 
+def hls_hue(hls) -> float:
+    return hls[0] * 360
+
+
+# pick_accents uses numpy when it is installed and plain Python otherwise;
+# cases that matter for both run against each explicitly.
+PICKERS = [nowplaying.pick_accents, nowplaying._pick_accents_py]
+
+
 def speckle(img, colours, count, seed=1):
     """Scatter single pixels of the given colours, the way JPEG noise and
     film grain put stray near-black chroma into an otherwise clean cover."""
@@ -91,6 +100,39 @@ class AccentTests(unittest.TestCase):
         rgb = nowplaying.pick_accent(img)
         self.assertNotEqual(rgb, nowplaying.FALLBACK_RGB)
         self.assertLess(hue_dist(hue_deg(rgb), hue_deg((30, 215, 70))), 12, "accent %r is not green" % (rgb,))
+
+    def test_scattered_specks_are_not_a_colour(self):
+        # 4% of the cover in single red pixels, on grey: grain, not a colour.
+        # A thumbnail blurs specks like these away; the numpy path works on the
+        # full cover, where they stay sharp, so only the blob test stops them.
+        img = speckle(Image.new("RGB", (400, 400), (128, 128, 128)), [(220, 30, 30)], 6400)
+        for pick in PICKERS:
+            with self.subTest(pick=pick.__name__):
+                self.assertEqual(pick(img), (None, None, None))
+        self.assertEqual(nowplaying.pick_accent(img), nowplaying.FALLBACK_RGB)
+
+    def test_close_hues_merge_and_a_small_region_still_counts(self):
+        # Red and orange-red halves are one colour, not two; the green dot,
+        # about 1.8% of the cover, is the second colour and nothing is third.
+        img = Image.new("RGB", (400, 400), (220, 40, 40))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((200, 0, 400, 400), fill=(235, 90, 40))
+        draw.ellipse((170, 170, 230, 230), fill=(40, 190, 60))
+        for pick in PICKERS:
+            with self.subTest(pick=pick.__name__):
+                first, second, third = pick(img)
+                self.assertLess(hue_dist(hls_hue(first), hue_deg((225, 60, 40))), 20)
+                self.assertIsNotNone(second, "the green dot was lost")
+                self.assertLess(hue_dist(hls_hue(second), hue_deg((40, 190, 60))), 15)
+                self.assertIsNone(third)
+
+    def test_dark_vivid_colour_is_still_named(self):
+        # A deep purple is dark (Oklab L ~0.3) but plainly a colour; a
+        # lightness cut set too high called covers like this neutral.
+        img = Image.new("RGB", (200, 200), (60, 20, 90))
+        rgb = nowplaying.pick_accent(img)
+        self.assertNotEqual(rgb, nowplaying.FALLBACK_RGB)
+        self.assertLess(hue_dist(hue_deg(rgb), hue_deg((60, 20, 90))), 15)
 
     def test_accent_respects_the_readability_floors(self):
         # A dark, dull blue still has to read against a dark panel.

@@ -12,9 +12,10 @@ two files into `www/`, which HA serves at `/local/` with no authentication:
 Nothing secret ever leaves HA: `/local/` is unauthenticated by design, and
 these two files contain only what is already on screen.
 
-The accent colour is the interesting part. It is picked from the artwork's
-pixels by a hue histogram weighted toward vivid colour, so the skin can tint
-text to match the album without looking washed out. See pick_accent().
+The accent colour is the interesting part. It is the artwork's most dominant
+colour region, found by clustering in Oklab and ignoring specks, so the skin
+can tint text to match the album without looking washed out. See
+pick_accent().
 
 Source-agnostic: it takes whatever entity_picture / title / artist it is
 handed, so Music Assistant, Spotify, Sonos, Cast, Plex, Jellyfin, Squeezebox,
@@ -52,21 +53,39 @@ import sys
 import urllib.request
 
 # --- accent tuning ----------------------------------------------------------
-# The accent is picked per pixel: a hue histogram in which every pixel counts
-# by its chroma squared (max-min of RGB - zero for black, white and grey), so
-# vivid colour dominates and muddy shading barely registers. The peak hue wins
-# and the accent is the average of the pixels around it.
+# The accent is the cover's most dominant colour region, found in Oklab:
+#   1. Pixels too grey or too dark to name a colour sit out (Oklab chroma and
+#      lightness), so black, white and grey art falls back to FALLBACK_RGB.
+#   2. The rest are clustered with k-means in Oklab, a perceptual space, so
+#      "close" means close to the eye.
+#   3. Clusters within ACCENT_MERGE_HUE of each other merge: light and dark red
+#      are one colour.
+#   4. A colour's area counts only its connected blobs of ACCENT_BLOB_SHARE of
+#      the cover or more, so grain, JPEG noise and scattered specks add nothing
+#      however many there are.
+#   5. Colours rank by that area times their mean chroma, and must cover
+#      ACCENT_MIN_SHARE of the cover to count at all.
 #
-# This replaced scoring a 12-colour quantised palette on HLS saturation. HLS
-# rates near-black as fully saturated (#020001 is S=1.0), so on dark covers a
-# speck of black won and was lifted into a neon tint - The Witcher 3's
-# black-and-red cover came out hot pink - and quantising averaged small vivid
-# accents away into the dark mass.
-ACCENT_HUE_BINS = 36            # 10 degrees each
-ACCENT_MIN_CHROMA = 0.18        # below this a pixel is black/white/grey
-ACCENT_MIN_VALUE = 0.20         # and anything this dark is too
-ACCENT_MIN_SHARE = 0.006        # under 0.6% vivid pixels the cover is neutral
-ACCENT_SPREAD = 1.5             # bins either side of the peak that form the colour
+# History: a 12-colour quantised palette scored on HLS saturation came first.
+# HLS rates near-black as fully saturated (#020001 is S=1.0), so on dark covers
+# a speck of black won and was lifted into a neon tint - The Witcher 3's
+# black-and-red cover came out hot pink. A chroma-squared hue histogram
+# replaced it, but it ranked pixels by vividness rather than area and had no
+# notion of specks, so a small accent next to a large field could lose to
+# noise or vanish.
+#
+# With numpy (optional, and shipped in the Home Assistant image) this runs on
+# the whole cover in about a second; without it, the same method runs in plain
+# Python on an ACCENT_SIDE thumbnail.
+ACCENT_K = 16                   # k-means clusters before merging
+ACCENT_ITER = 12
+ACCENT_MIN_CHROMA = 0.045       # Oklab chroma; below this a pixel is neutral
+ACCENT_MIN_L = 0.22             # Oklab lightness; below this it is too dark to name
+ACCENT_MERGE_HUE = 30           # degrees; closer clusters are one colour
+ACCENT_BLOB_SHARE = 0.0009      # smaller connected bits are specks
+ACCENT_BLOB_MIN_PX = 8
+ACCENT_MIN_SHARE = 0.005        # of the whole cover, in blobs, for a colour to count
+ACCENT_SIDE = 160               # thumbnail for the plain-Python path
 # Floors, so washed-out art still produces something readable against a dark
 # panel rather than near-black text.
 ACCENT_LIGHT_MIN = 0.58
@@ -106,46 +125,308 @@ def b64arg(value: str) -> str:
         return ""
 
 
+def _to_oklab(r, g, b):
+    def lin(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = lin(r), lin(g), lin(b)
+    l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+            1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+            0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_)
+
+
+def _from_oklab(L, a, b):
+    l_ = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    m_ = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    s_ = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3
+    rgb = (4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
+           -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
+           -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_)
+
+    def enc(c):
+        c = min(1.0, max(0.0, c))
+        return c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return tuple(enc(c) for c in rgb)
+
+
+def _hue_deg(a, b):
+    return math.degrees(math.atan2(b, a)) % 360
+
+
+def _hue_gap(h1, h2):
+    d = abs(h1 - h2) % 360
+    return min(d, 360 - d)
+
+
+def _dist2(p, c):
+    return (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 + (p[2] - c[2]) ** 2
+
+
+def _in_big_blobs(label, w, h, blob_min):
+    """For a row-major w x h grid of colour labels (-1 for none), a list
+    saying for each cell whether it sits in a 4-connected run of its own label
+    at least blob_min cells big. Shared by both pickers: the plain-Python one
+    runs it on its thumbnail, the numpy one on a coarse grid of the cover."""
+    n = w * h
+    keep = [False] * n
+    seen = [False] * n
+    for start in range(n):
+        g = label[start]
+        if g < 0 or seen[start]:
+            continue
+        blob, stack = [], [start]
+        seen[start] = True
+        while stack:
+            i = stack.pop()
+            blob.append(i)
+            x, y = i % w, i // w
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    q = ny * w + nx
+                    if not seen[q] and label[q] == g:
+                        seen[q] = True
+                        stack.append(q)
+        if len(blob) >= blob_min:
+            for i in blob:
+                keep[i] = True
+    return keep
+
+
+def _pick_accents_py(img):
+    """pick_accents without numpy: the same method in plain Python, on an
+    ACCENT_SIDE thumbnail to keep it to a few seconds."""
+    import random
+
+    small = img.copy()
+    small.thumbnail((ACCENT_SIDE, ACCENT_SIDE))
+    w, h = small.size
+    raw = small.tobytes()
+    n = w * h
+    labs = [None] * n
+    pts = []
+    for i in range(n):
+        L, a, b = _to_oklab(raw[3 * i] / 255, raw[3 * i + 1] / 255, raw[3 * i + 2] / 255)
+        if L >= ACCENT_MIN_L and math.hypot(a, b) >= ACCENT_MIN_CHROMA:
+            labs[i] = (L, a, b)
+            pts.append(i)
+    blob_min = max(ACCENT_BLOB_MIN_PX, int(round(n * ACCENT_BLOB_SHARE)))
+    if len(pts) < max(blob_min, n * ACCENT_MIN_SHARE):
+        return None, None, None
+
+    # k-means++ seeding with a fixed seed, so a cover always yields the same
+    # colours run to run.
+    rng = random.Random(0)
+    k = min(ACCENT_K, len(pts))
+    cents = [labs[pts[rng.randrange(len(pts))]]]
+    near = [_dist2(labs[i], cents[0]) for i in pts]
+    while len(cents) < k:
+        total = sum(near)
+        if total <= 0:
+            break
+        pick, acc, j = rng.random() * total, 0.0, 0
+        for j, dist in enumerate(near):
+            acc += dist
+            if acc >= pick:
+                break
+        cents.append(labs[pts[j]])
+        near = [min(nd, _dist2(labs[i], cents[-1])) for nd, i in zip(near, pts)]
+    assign = [0] * len(pts)
+    for _ in range(ACCENT_ITER):
+        sums = [[0.0, 0.0, 0.0, 0] for _ in cents]
+        for j, i in enumerate(pts):
+            p = labs[i]
+            c = min(range(len(cents)), key=lambda q: _dist2(p, cents[q]))
+            assign[j] = c
+            s = sums[c]
+            s[0] += p[0]
+            s[1] += p[1]
+            s[2] += p[2]
+            s[3] += 1
+        cents = [(s[0] / s[3], s[1] / s[3], s[2] / s[3]) if s[3] else cents[q]
+                 for q, s in enumerate(sums)]
+
+    # Merge clusters closer than ACCENT_MERGE_HUE, biggest first, so each merged
+    # colour is anchored on its largest part.
+    sizes = [0] * len(cents)
+    for c in assign:
+        sizes[c] += 1
+    group_of = {}
+    groups = []  # [hue, size]
+    for c in sorted(range(len(cents)), key=lambda q: -sizes[q]):
+        if not sizes[c]:
+            continue
+        hue = _hue_deg(cents[c][1], cents[c][2])
+        for g, (gh, _gs) in enumerate(groups):
+            if _hue_gap(hue, gh) < ACCENT_MERGE_HUE:
+                group_of[c] = g
+                groups[g][1] += sizes[c]
+                break
+        else:
+            group_of[c] = len(groups)
+            groups.append([hue, sizes[c]])
+    label = [-1] * n
+    for j, i in enumerate(pts):
+        label[i] = group_of[assign[j]]
+
+    # Connected blobs (4-neighbour) per colour; only big-enough ones count.
+    kept = [[] for _ in groups]
+    for i, ok in enumerate(_in_big_blobs(label, w, h, blob_min)):
+        if ok:
+            kept[label[i]].append(i)
+
+    ranked = []
+    for members in kept:
+        if len(members) < n * ACCENT_MIN_SHARE:
+            continue
+        m = len(members)
+        lab = tuple(sum(labs[i][c] for i in members) / m for c in range(3))
+        chroma = sum(math.hypot(labs[i][1], labs[i][2]) for i in members) / m
+        ranked.append((m * chroma, lab))
+    ranked.sort(key=lambda x: -x[0])
+    colours = [colorsys.rgb_to_hls(*_from_oklab(*lab)) for _score, lab in ranked[:3]]
+    if not colours:
+        return None, None, None
+    colours += [None] * (3 - len(colours))
+    return tuple(colours)
+
+
+def pick_accents(img):
+    """(primary, secondary, third) colours of the cover, each (hue, lightness,
+    saturation) in HLS or None, most dominant first. Primary is None when the
+    cover has no colour worth naming; secondary and third are None when it has
+    fewer distinct colours than that. See the accent tuning comment above.
+
+    Runs on the full cover with numpy, which ships in the Home Assistant
+    image. Without it, it falls back to _pick_accents_py, the same method in
+    plain Python on an ACCENT_SIDE thumbnail."""
+    try:
+        import numpy as np
+    except ImportError:
+        return _pick_accents_py(img)
+    return _pick_accents_np(img, np)
+
+
+# sRGB -> linear light for every 8-bit value, built once: a table lookup is
+# far cheaper than a power per channel over 400k pixels.
+_LINEAR = None
+
+
+def _pick_accents_np(img, np):
+    global _LINEAR
+    rgb8 = np.asarray(img.convert("RGB"))
+    h, w, _ = rgb8.shape
+    n = h * w
+
+    # sRGB -> Oklab, vectorised; same matrices as _to_oklab.
+    if _LINEAR is None:
+        v = np.arange(256) / 255.0
+        _LINEAR = np.where(v <= 0.04045, v / 12.92, ((v + 0.055) / 1.055) ** 2.4)
+    lin = _LINEAR[rgb8]
+    lms = np.cbrt(lin @ np.array([[0.4122214708, 0.2119034982, 0.0883024619],
+                                  [0.5363325363, 0.6806995451, 0.2817188376],
+                                  [0.0514459929, 0.1073969566, 0.6299787005]]))
+    lab = lms @ np.array([[0.2104542553, 1.9779984951, 0.0259040371],
+                          [0.7936177850, -2.4285922050, 0.7827717662],
+                          [-0.0040720468, 0.4505937099, -0.8086757660]])
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    mask = (lab[..., 0] >= ACCENT_MIN_L) & (chroma >= ACCENT_MIN_CHROMA)
+    blob_min = max(ACCENT_BLOB_MIN_PX, int(round(n * ACCENT_BLOB_SHARE)))
+    if mask.sum() < max(blob_min, n * ACCENT_MIN_SHARE):
+        return None, None, None
+    pts = lab[mask]
+
+    # k-means++ seeded from a fixed-seed sample (a cover always yields the
+    # same colours), then Lloyd iterations over every chromatic pixel.
+    rng = np.random.default_rng(0)
+    sample = pts[rng.choice(len(pts), size=min(len(pts), 20000), replace=False)]
+    k = min(ACCENT_K, len(sample))
+    cents = [sample[rng.integers(len(sample))]]
+    near = ((sample - cents[0]) ** 2).sum(1)
+    while len(cents) < k and near.sum() > 0:
+        cents.append(sample[rng.choice(len(sample), p=near / near.sum())])
+        near = np.minimum(near, ((sample - cents[-1]) ** 2).sum(1))
+    cents = np.array(cents)
+
+    def nearest(p, cs):
+        # |p - c|^2 = |p|^2 - 2 p.c + |c|^2: one (pixels x k) matrix rather
+        # than a (pixels x k x 3) one.
+        return ((p ** 2).sum(1)[:, None] - 2 * p @ cs.T + (cs ** 2).sum(1)[None, :]).argmin(1)
+    # The centroids are fitted on the sample, and only the final assignment
+    # touches every pixel. A pass over the whole 640px cover costs about a
+    # second on the HA box's CPU, so iterating on it took 20s - over the
+    # sensor's command_timeout. A 20k-pixel sample places the centroids just
+    # as well.
+    for _ in range(ACCENT_ITER):
+        sa = nearest(sample, cents)
+        for c in range(len(cents)):
+            hit = sa == c
+            if hit.any():
+                cents[c] = sample[hit].mean(0)
+    assign = nearest(pts, cents)
+
+    # Merge clusters closer than ACCENT_MERGE_HUE, biggest first.
+    sizes = np.bincount(assign, minlength=len(cents))
+    group_of = np.full(len(cents), -1)
+    groups = []  # hue of each group's anchor
+    for c in np.argsort(-sizes):
+        if not sizes[c]:
+            continue
+        hue = _hue_deg(cents[c][1], cents[c][2])
+        for g, gh in enumerate(groups):
+            if _hue_gap(hue, gh) < ACCENT_MERGE_HUE:
+                group_of[c] = g
+                break
+        else:
+            group_of[c] = len(groups)
+            groups.append(hue)
+    label = np.full((h, w), -1)
+    label[mask] = group_of[assign]
+
+    # Connected blobs (4-neighbour) per colour; only big-enough ones count.
+    # Found on a coarse grid - each cell the majority colour of an f x f block,
+    # 160 cells a side for a 640px cover - with the same plain-Python walk the
+    # fallback uses. scipy.ndimage.label could do it at full size, but just
+    # importing scipy costs 0.7s on the HA box, a quarter of a whole run, and
+    # a speck is as small on the grid as on the cover.
+    f = max(1, min(h, w) // ACCENT_SIDE)
+    gh, gw = h // f, w // f
+    blocks = label[:gh * f, :gw * f].reshape(gh, f, gw, f)
+    counts = np.stack([(blocks == g).sum((1, 3)) for g in range(len(groups))])
+    cells = counts.argmax(0)
+    cells[counts.max(0) * 2 < f * f] = -1  # mostly grey or dark: no colour
+    cell_min = max(ACCENT_BLOB_MIN_PX, int(round(gh * gw * ACCENT_BLOB_SHARE)))
+    big = np.array(_in_big_blobs(cells.ravel().tolist(), gw, gh, cell_min)).reshape(gh, gw)
+    big_cells = np.where(big, cells, -1)
+    in_big = np.full((h, w), -1)
+    in_big[:gh * f, :gw * f] = np.repeat(np.repeat(big_cells, f, 0), f, 1)
+    ranked = []
+    for g in range(len(groups)):
+        keep = (label == g) & (in_big == g)
+        m = int(keep.sum())
+        if m < n * ACCENT_MIN_SHARE:
+            continue
+        ranked.append((m * float(chroma[keep].mean()), tuple(lab[keep].mean(0))))
+    ranked.sort(key=lambda x: -x[0])
+    colours = [colorsys.rgb_to_hls(*_from_oklab(*mean)) for _score, mean in ranked[:3]]
+    if not colours:
+        return None, None, None
+    colours += [None] * (3 - len(colours))
+    return tuple(colours)
+
+
 def pick_accent(img) -> tuple[int, int, int]:
-    """Choose a vibrant, readable accent colour from the artwork.
+    """Choose a vibrant, readable accent colour from the artwork: the most
+    dominant colour region (pick_accents), lifted to the readability floors.
 
     Neutral art (black, white, grey, sepia) has no hue worth tinting with, so
     it gets FALLBACK_RGB rather than an invented colour.
     """
-    small = img.copy()
-    small.thumbnail((96, 96))
-    raw = small.tobytes()
-    bins = [0.0] * ACCENT_HUE_BINS
-    samples = []
-    for i in range(0, len(raw), 3):
-        r, g, b = raw[i] / 255, raw[i + 1] / 255, raw[i + 2] / 255
-        hi, lo = max(r, g, b), min(r, g, b)
-        chroma = hi - lo
-        if chroma < ACCENT_MIN_CHROMA or hi < ACCENT_MIN_VALUE:
-            continue
-        h, s, v = colorsys.rgb_to_hsv(r, g, b)
-        w = chroma * chroma
-        bins[int(h * ACCENT_HUE_BINS) % ACCENT_HUE_BINS] += w
-        samples.append((h, s, v, w))
-    if len(samples) < max(12, (len(raw) // 3) * ACCENT_MIN_SHARE):
+    primary = pick_accents(img)[0]
+    if primary is None:
         return FALLBACK_RGB
-
-    # Light smoothing so a hue sitting on a bin edge is not split in two.
-    n = ACCENT_HUE_BINS
-    smooth = [bins[i - 1] * 0.5 + bins[i] + bins[(i + 1) % n] * 0.5 for i in range(n)]
-    peak = (max(range(n), key=smooth.__getitem__) + 0.5) / n
-
-    sx = sy = sw = ss = sv = 0.0
-    for h, s, v, w in samples:
-        d = abs(h - peak)
-        if min(d, 1 - d) <= ACCENT_SPREAD / n:
-            sx += w * math.cos(2 * math.pi * h)
-            sy += w * math.sin(2 * math.pi * h)
-            sw += w
-            ss += w * s
-            sv += w * v
-    hue = (math.atan2(sy, sx) / (2 * math.pi)) % 1.0
-    _, light, sat = colorsys.rgb_to_hls(*colorsys.hsv_to_rgb(hue, ss / sw, sv / sw))
+    hue, light, sat = primary
     light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
     sat = max(sat, ACCENT_SAT_MIN)
     return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, light, sat))

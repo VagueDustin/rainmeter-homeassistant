@@ -26,8 +26,10 @@ screenshots/                          demonstration data only
 ## Commands
 
 There is no build system or package manifest. The Python scripts use only the standard library plus
-optional Pillow (artwork and accent extraction; absent = no cover, neutral accent). The one test suite
-covers the accent picker and needs Pillow.
+optional Pillow (artwork and accent extraction; absent = no cover, neutral accent) and optional numpy
+(the accent picker on the full cover; absent = the same picker in plain Python on a thumbnail). The
+one test suite covers the accent picker and needs Pillow; it tests the plain-Python path always and
+the numpy path when numpy is installed.
 
 ```bash
 python -m py_compile homeassistant/scripts/*.py                  # syntax check
