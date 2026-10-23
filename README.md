@@ -83,6 +83,10 @@ Both skins keep their tunables in a `[Variables]` block at the top: panel width 
 
 **Staleness guard (status board, 1.3.0).** A skin that polls a file has a quiet failure mode: if the pipeline dies (HA down, a firewall change, a Wi-Fi drop), the last payload stays on screen looking current, and yesterday's presence board reads as today's. So the writer now stamps a write-time epoch into the JSON (`write_json.py --stamp ts`), the package re-renders at least every 5 minutes as a heartbeat, and the skin compares that stamp against the clock: if it stops advancing for `StaleSecs` (default 15 minutes), the data rows hide and a `NO LINK - LIVE DATA PAUSED` notice shows until the feed recovers. The clock and date are machine-local and keep ticking throughout. One regex subtlety worth stealing for your own skins: under WebParser's ungreedy `(?U)` flag, `(\d+)` captures a *single digit*, so the epoch capture is anchored to the closing brace (`"ts":\s*(\d+)\}`) to force the full number.
 
+**Second accent colour (now playing, 1.1.0).** `nowplaying.py` publishes a second colour next to the first: `rgb2`, `hex2` and `rgb2_rm`, in the same shapes as `rgb`, `hex` and `rgb_rm`. It is the cover's next distinct hue (at least 40 degrees from the first, with a real share of the pixels), or, for a one-colour cover, the cover's own neutral tone, so a red-on-cream sleeve gives red and cream rather than red and an invented colour. The KDE widget tints its source line with it; a skin can use it for any second line or a two-colour design.
+
+**KDE widgets (now playing 1.1.0, status board 1.4.0).** Glass panels, panels sized to their content, scrolling long lines, the source line in the second accent, sharper text, and a single **Scale** setting for projectors and TVs. See [kde/README.md](kde/README.md).
+
 The status board additionally has:
 
 - `Position` sets where it sits along the top edge: `0` left, `1` centre (default), `2` right, always with `Margin` padding on both axes.
