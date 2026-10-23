@@ -16,6 +16,7 @@ from __future__ import annotations
 import colorsys
 import functools
 import http.server
+import importlib.util
 import json
 import os
 import random
@@ -134,6 +135,19 @@ class AccentTests(unittest.TestCase):
         rgb = nowplaying.pick_accent(img)
         self.assertNotEqual(rgb, nowplaying.FALLBACK_RGB)
         self.assertLess(hue_dist(hue_deg(rgb), hue_deg((60, 20, 90))), 15)
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "numpy path only")
+    def test_huge_cover_is_read_at_a_bounded_size(self):
+        # Some integrations hand over 3000px originals; read at full size the
+        # numpy path needed over a gigabyte. It must read them as it reads a
+        # 640px copy.
+        img = Image.new("RGB", (3000, 3000), (210, 40, 40))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((1500, 0, 3000, 3000), fill=(40, 70, 210))
+        draw.ellipse((1200, 1200, 1800, 1800), fill=(40, 190, 60))
+        small = img.copy()
+        small.thumbnail((nowplaying.ACCENT_NP_SIDE, nowplaying.ACCENT_NP_SIDE))
+        self.assertEqual(nowplaying.pick_regions(img), nowplaying.pick_regions(small))
 
     def test_accent_respects_the_readability_floors(self):
         # A dark, dull blue still has to read against a dark panel.

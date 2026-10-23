@@ -94,6 +94,13 @@ ACCENT_BLOB_SHARE = 0.0009      # smaller connected bits are specks
 ACCENT_BLOB_MIN_PX = 8
 ACCENT_MIN_SHARE = 0.005        # of the whole cover, in blobs, for a colour to count
 ACCENT_SIDE = 160               # thumbnail for the plain-Python path
+# The numpy path reads the cover at up to this size. Streaming covers are
+# usually 300-640px; some integrations hand over 3000px originals, which at
+# full size cost over a gigabyte and could outrun the sensor's timeout. The
+# colour regions of a cover do not change between 640px and 3000px.
+ACCENT_NP_SIDE = 640
+# Pixels assigned to clusters per step, so the distance matrix stays a few MB.
+ACCENT_CHUNK = 65536
 # Floors, so washed-out art still produces something readable against a dark
 # panel rather than near-black text.
 ACCENT_LIGHT_MIN = 0.58
@@ -338,6 +345,9 @@ _LINEAR = None
 
 def _pick_regions_np(img, np, min_l=ACCENT_MIN_L):
     global _LINEAR
+    if max(img.size) > ACCENT_NP_SIDE:
+        img = img.copy()
+        img.thumbnail((ACCENT_NP_SIDE, ACCENT_NP_SIDE))
     rgb8 = np.asarray(img.convert("RGB"))
     h, w, _ = rgb8.shape
     n = h * w
@@ -361,7 +371,7 @@ def _pick_regions_np(img, np, min_l=ACCENT_MIN_L):
     pts = lab[mask]
 
     # k-means++ seeded from a fixed-seed sample (a cover always yields the
-    # same colours), then Lloyd iterations over every chromatic pixel.
+    # same colours), then Lloyd iterations on that sample.
     rng = np.random.default_rng(0)
     sample = pts[rng.choice(len(pts), size=min(len(pts), 20000), replace=False)]
     k = min(ACCENT_K, len(sample))
@@ -373,9 +383,14 @@ def _pick_regions_np(img, np, min_l=ACCENT_MIN_L):
     cents = np.array(cents)
 
     def nearest(p, cs):
-        # |p - c|^2 = |p|^2 - 2 p.c + |c|^2: one (pixels x k) matrix rather
-        # than a (pixels x k x 3) one.
-        return ((p ** 2).sum(1)[:, None] - 2 * p @ cs.T + (cs ** 2).sum(1)[None, :]).argmin(1)
+        # |p - c|^2 = |p|^2 - 2 p.c + |c|^2: a (pixels x k) matrix rather than
+        # a (pixels x k x 3) one, built ACCENT_CHUNK pixels at a time.
+        c2 = (cs ** 2).sum(1)[None, :]
+        out = np.empty(len(p), dtype=np.intp)
+        for i in range(0, len(p), ACCENT_CHUNK):
+            q = p[i:i + ACCENT_CHUNK]
+            out[i:i + ACCENT_CHUNK] = ((q ** 2).sum(1)[:, None] - 2 * q @ cs.T + c2).argmin(1)
+        return out
     # The centroids are fitted on the sample, and only the final assignment
     # touches every pixel. A pass over the whole 640px cover costs about a
     # second on the HA box's CPU, so iterating on it took 20s - over the
