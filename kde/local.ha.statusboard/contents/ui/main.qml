@@ -6,9 +6,17 @@
  * /local/statusboard.json from the unchanged Home Assistant package:
  *   STATS  up to 4 slots, a label over a value
  *   CHIPS  up to 6 slots, a coloured name over a sub-line
- * Empty slots hide, empty rows collapse, and the panel height follows.
+ * Empty slots hide, empty rows collapse, and the panel follows: it is as
+ * wide as its content (capped by panelWidth and the widget's own width)
+ * and as tall, so there is no empty band around a short board.
  * Time and date come from this machine, so the clock keeps ticking if HA
  * goes away.
+ *
+ * Sharpness: every size goes through px() (uiScale) and fs() (never under
+ * minTextSize), so the board can be scaled up for a projector or TV. Text is
+ * drawn hinted (NativeRendering, full hinting) with a 1 px raised shadow; a
+ * blurred halo rendered through a layer left a haze around every letter, which
+ * a large 1080p screen makes very visible.
  */
 import QtQuick
 import QtQuick.Layouts
@@ -36,6 +44,19 @@ PlasmoidItem {
 
     property var pending: null
     property double pendingSince: 0
+
+    // Sizes: px() scales a 1x design value by uiScale; fs() is px() for text, never under minTextSize.
+    function px(n) { return Math.round(n * (cfg.uiScale > 0 ? cfg.uiScale : 1)) }
+    function fs(n) { return Math.max(cfg.minTextSize || 0, px(n)) }
+
+    // Crisp text: hinted glyphs on whole pixels and a hard 1 px shadow (no layer, no blur).
+    component Txt: Text {
+        renderType: Text.NativeRendering
+        font.hintingPreference: Font.PreferFullHinting
+        font.family: root.cfg.fontFamily
+        style: Text.Raised
+        styleColor: root.cfg.shadowColor
+    }
 
     // HA sends Rainmeter-style "r,g,b" (optionally ",a") strings.
     function rgb(s, fallback) {
@@ -94,155 +115,174 @@ PlasmoidItem {
 
     fullRepresentation: Item {
         id: stage
-        Layout.preferredWidth: root.cfg.panelWidth
-        Layout.preferredHeight: 280
-        Layout.minimumWidth: 300
-        Layout.minimumHeight: 140
+        Layout.preferredWidth: board.naturalWidth
+        Layout.preferredHeight: board.naturalHeight
+        Layout.minimumWidth: root.px(200)
+        Layout.minimumHeight: root.px(120)
 
         readonly property color muted: root.cfg.mutedColor
-        readonly property string family: root.cfg.fontFamily
+        readonly property int pad: root.px(18)  // left/right padding inside the panel
 
         Item {
             id: board
-            width: Math.min(stage.width, root.cfg.panelWidth)
-            height: content.implicitHeight + 28
+            objectName: "board"
+            // Sized to the content, never wider than panelWidth or the widget.
+            readonly property real naturalWidth: Math.min(root.px(root.cfg.panelWidth), Math.ceil(content.implicitWidth) + 2 * stage.pad)
+            readonly property real naturalHeight: Math.ceil(content.implicitHeight) + 2 * content.anchors.topMargin
+            width: Math.min(stage.width, naturalWidth)
+            height: naturalHeight
             y: 0
             x: root.cfg.position === 0 ? 0
              : root.cfg.position === 2 ? stage.width - width
-             : (stage.width - width) / 2
+             : Math.round((stage.width - width) / 2)
+            Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
             Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
+            // Frosted glass (Frost.qml) or the plain translucent panel.
+            Frost {
+                objectName: "frost"
+                anchors.fill: parent
+                visible: root.cfg.showPanel && root.cfg.frosted
+                radius: root.px(root.cfg.radius)
+                tint: root.cfg.frostTint
+            }
             Rectangle {
                 anchors.fill: parent
-                visible: root.cfg.showPanel
-                radius: root.cfg.radius
+                visible: root.cfg.showPanel && !root.cfg.frosted
+                radius: root.px(root.cfg.radius)
                 color: root.cfg.panelColor
             }
 
             ColumnLayout {
                 id: content
+                objectName: "content"
                 anchors.top: parent.top
-                anchors.topMargin: 10
+                anchors.topMargin: root.px(9)
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.leftMargin: 24
-                anchors.rightMargin: 24
-                spacing: 6
-
-                // Soft halo shadow so text stays readable with or without the panel.
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    shadowEnabled: true
-                    shadowColor: root.cfg.shadowColor
-                    shadowBlur: 0.55
-                    shadowScale: 1.02
-                    shadowVerticalOffset: 2
-                    shadowHorizontalOffset: 1
-                }
+                anchors.leftMargin: stage.pad
+                anchors.rightMargin: stage.pad
+                spacing: root.px(3)
 
                 // ---- clock ----
-                Text {
+                Txt {
                     Layout.alignment: Qt.AlignHCenter
                     text: Qt.formatTime(new Date(root.now), root.cfg.clockFormat)
                     color: "white"
-                    font.family: stage.family
-                    font.pixelSize: 64
-                    font.weight: Font.Light
+                    font.pixelSize: root.px(44)
+                    font.weight: Font.Medium
                 }
-                Text {
+                Txt {
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.topMargin: -10
+                    Layout.topMargin: -root.px(7)
                     text: Qt.formatDate(new Date(root.now), root.cfg.dateFormat)
                     color: stage.muted
-                    font.family: stage.family
-                    font.pixelSize: 19
+                    font.pixelSize: root.fs(15)
+                    font.weight: Font.Medium
                 }
 
                 // Divider, only with a panel (as in the original).
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.topMargin: 4
+                    Layout.topMargin: root.px(3)
                     Layout.preferredHeight: 1
                     color: Qt.rgba(1, 1, 1, 0.12)
                     visible: root.cfg.showPanel && (root.stale || root.stats.length > 0 || root.chips.length > 0)
                 }
 
                 // ---- stale notice ----
-                Text {
+                Txt {
                     Layout.alignment: Qt.AlignHCenter
                     visible: root.stale
                     text: root.lastTs === 0 ? i18n("WAITING FOR HOME ASSISTANT") : i18n("NO LINK - LIVE DATA PAUSED")
                     color: "#ff6e6e"
-                    font.family: stage.family
-                    font.pixelSize: 15
+                    font.pixelSize: root.fs(13)
                     font.bold: true
                     font.letterSpacing: 1
                 }
 
                 // ---- stats: label over value ----
+                // Rows and columns take their natural width (centred, no
+                // stretching across empty space) and only shrink, eliding,
+                // when the board is capped narrower than the content.
                 RowLayout {
+                    objectName: "statsRow"
+                    Layout.alignment: Qt.AlignHCenter
                     Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     visible: !root.stale && root.stats.length > 0
-                    spacing: 0
+                    spacing: root.px(18)
                     Repeater {
                         model: root.stats
                         ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredWidth: 1      // equal columns
+                            Layout.preferredWidth: implicitWidth
+                            Layout.maximumWidth: implicitWidth
                             spacing: 0
-                            Text {
+                            Txt {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
                                 visible: modelData.label !== ""
                                 text: modelData.label
                                 color: stage.muted
                                 elide: Text.ElideRight
-                                font.family: stage.family
-                                font.pixelSize: 12
+                                font.pixelSize: root.fs(10)
                                 font.bold: true
                             }
-                            Text {
+                            Txt {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData.value
                                 color: modelData.color
                                 elide: Text.ElideRight
-                                font.family: stage.family
-                                font.pixelSize: 30
+                                font.pixelSize: root.px(21)
+                                font.weight: Font.Medium
                             }
                         }
                     }
                 }
 
+                // Second divider between the two rows, when both show.
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.topMargin: root.px(2)
+                    Layout.preferredHeight: 1
+                    color: Qt.rgba(1, 1, 1, 0.12)
+                    visible: root.cfg.showPanel && !root.stale && root.stats.length > 0 && root.chips.length > 0
+                }
+
                 // ---- chips: coloured name over sub-line ----
                 RowLayout {
+                    objectName: "chipsRow"
+                    Layout.alignment: Qt.AlignHCenter
                     Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     visible: !root.stale && root.chips.length > 0
-                    spacing: 0
+                    spacing: root.px(20)
                     Repeater {
                         model: root.chips
                         ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            spacing: -2
-                            Text {
+                            Layout.preferredWidth: implicitWidth
+                            Layout.maximumWidth: implicitWidth
+                            spacing: -root.px(2)
+                            Txt {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData.name
                                 color: modelData.color
                                 elide: Text.ElideRight
-                                font.family: stage.family
-                                font.pixelSize: 20
+                                font.pixelSize: root.fs(14)
                                 font.bold: true
                             }
-                            Text {
+                            Txt {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData.sub
                                 color: stage.muted
                                 elide: Text.ElideRight
-                                font.family: stage.family
-                                font.pixelSize: 13
+                                font.pixelSize: root.fs(11)
+                                font.weight: Font.Medium
                             }
                         }
                     }

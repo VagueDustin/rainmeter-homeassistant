@@ -11,11 +11,20 @@
     <entry name="dateFormat" type="String"><default>dddd, MMMM d, yyyy</default></entry>
     <!-- 0 = left, 1 = centre, 2 = right, inside the widget's area -->
     <entry name="position" type="Int"><default>1</default></entry>
+    <!-- Upper bound: the board is as wide as its content, up to this. -->
     <entry name="panelWidth" type="Int"><default>680</default></entry>
     <entry name="showPanel" type="Bool"><default>true</default></entry>
+    <!-- Scales every size (text, padding, art, panel). 1.0 suits a desktop monitor; a projector or TV
+         seen from across a room reads better around 1.25 with minTextSize 16. -->
+    <entry name="uiScale" type="Double"><default>1.0</default></entry>
+    <!-- No text smaller than this many px after scaling (0 = no floor). -->
+    <entry name="minTextSize" type="Int"><default>0</default></entry>
     <entry name="radius" type="Int"><default>12</default></entry>
     <entry name="fontFamily" type="String"><default>Roboto</default></entry>
     <entry name="panelColor" type="String"><default>#6e202020</default></entry>
+    <!-- Frosted glass (Frost.qml): frostTint + light sheen, edge and shadow; panelColor when off. -->
+    <entry name="frosted" type="Bool"><default>true</default></entry>
+    <entry name="frostTint" type="String"><default>#1fffffff</default></entry>
     <entry name="mutedColor" type="String"><default>#aab2be</default></entry>
     <entry name="shadowColor" type="String"><default>#eb000000</default></entry>
   </group>

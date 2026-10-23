@@ -110,6 +110,7 @@ command_line:
         - source
         - art
         - hex
+        - hex2
         - ver
 
 automation:

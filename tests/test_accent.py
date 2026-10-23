@@ -6,8 +6,9 @@
 Needs Pillow and nothing else. Each case is a cover that a picker has
 actually got wrong, or a shape that is easy to get wrong: dark art with one
 vivid colour, art with no colour at all, and a small accent lost in a field.
-The last test runs the whole script against a throwaway local HTTP server to
-pin the JSON contract the skin parses (rgb, hex, rgb_rm).
+SecondAccentTests cover the second colour (pick_accents). The last test runs
+the whole script against a throwaway local HTTP server to pin the JSON contract
+the skin and widgets parse (rgb, hex, rgb_rm and rgb2, hex2, rgb2_rm).
 """
 
 from __future__ import annotations
@@ -45,9 +46,9 @@ def hls_hue(hls) -> float:
     return hls[0] * 360
 
 
-# pick_accents uses numpy when it is installed and plain Python otherwise;
+# pick_regions uses numpy when it is installed and plain Python otherwise;
 # cases that matter for both run against each explicitly.
-PICKERS = [nowplaying.pick_accents, nowplaying._pick_accents_py]
+PICKERS = [nowplaying.pick_regions, nowplaying._pick_regions_py]
 
 
 def speckle(img, colours, count, seed=1):
@@ -143,6 +144,66 @@ class AccentTests(unittest.TestCase):
         self.assertGreaterEqual(s, nowplaying.ACCENT_SAT_MIN - 0.01)
 
 
+class SecondAccentTests(unittest.TestCase):
+    def test_first_accent_is_pick_accent(self):
+        img = Image.new("RGB", (200, 200), (20, 30, 70))
+        ImageDraw.Draw(img).rectangle((0, 0, 99, 199), fill=(200, 40, 40))
+        self.assertEqual(nowplaying.pick_accents(img)[0], nowplaying.pick_accent(img))
+
+    def test_two_colour_cover_gives_both_hues(self):
+        # Red on the left, blue on the right: one colour each, in either order.
+        img = Image.new("RGB", (300, 300), (210, 40, 40))
+        ImageDraw.Draw(img).rectangle((150, 0, 299, 299), fill=(40, 70, 210))
+        first, second = nowplaying.pick_accents(img)
+        hues = sorted((hue_deg(first), hue_deg(second)))
+        self.assertLess(hue_dist(hues[0], 0), 15, "no red in %r, %r" % (first, second))
+        self.assertLess(hue_dist(hues[1], hue_deg((40, 70, 210))), 15, "no blue in %r, %r" % (first, second))
+
+    def test_second_colour_is_a_distinct_hue(self):
+        # An orange beside a red is too close to count as a second colour.
+        img = Image.new("RGB", (300, 300), (210, 30, 30))
+        ImageDraw.Draw(img).rectangle((150, 0, 299, 299), fill=(215, 60, 25))
+        first, second = nowplaying.pick_accents(img)
+        h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in second))
+        self.assertLess(s, 0.3, "second %r should be the neutral tone, not another red" % (second,))
+
+    def test_one_colour_cover_gets_its_neutral_tone(self):
+        # A red emblem on a warm off-white sleeve: the second colour is the sleeve.
+        img = Image.new("RGB", (300, 300), (226, 218, 204))
+        ImageDraw.Draw(img).ellipse((100, 100, 200, 200), fill=(190, 25, 30))
+        first, second = nowplaying.pick_accents(img)
+        self.assertLess(hue_dist(hue_deg(first), 0), 12)
+        h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in second))
+        self.assertAlmostEqual(l, nowplaying.SECOND_NEUTRAL_LIGHT, delta=0.02)
+        self.assertLess(s, 0.35)
+        self.assertGreater(second[0], second[2], "the warm sleeve should stay warm: %r" % (second,))
+
+    def test_tiny_second_hue_is_ignored(self):
+        # A few stray blue pixels are noise, not a second colour.
+        img = Image.new("RGB", (300, 300), (200, 35, 35))
+        speckle(img, [(40, 70, 210)], 40)
+        first, second = nowplaying.pick_accents(img)
+        self.assertGreater(hue_dist(hue_deg(second), hue_deg((40, 70, 210))), 60)
+
+    def test_second_accent_respects_the_readability_floors(self):
+        img = Image.new("RGB", (200, 200), (60, 10, 10))
+        ImageDraw.Draw(img).rectangle((100, 0, 199, 199), fill=(10, 20, 60))
+        second = nowplaying.pick_accents(img)[1]
+        h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in second))
+        self.assertGreaterEqual(l, nowplaying.ACCENT_LIGHT_MIN - 0.01)
+        self.assertGreaterEqual(s, nowplaying.ACCENT_SAT_MIN - 0.01)
+
+    def test_neutral_cover_keeps_the_fallback_first(self):
+        img = Image.new("RGB", (256, 256))
+        draw = ImageDraw.Draw(img)
+        for x in range(256):
+            draw.line((x, 0, x, 255), fill=(x, x, x))
+        first, second = nowplaying.pick_accents(img)
+        self.assertEqual(first, nowplaying.FALLBACK_RGB)
+        h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in second))
+        self.assertLess(s, 0.05)
+
+
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -183,10 +244,16 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(got["hex"], "#%02x%02x%02x" % rgb)
         self.assertEqual(got["rgb_rm"], "%d,%d,%d" % rgb)
         self.assertLess(hue_dist(hue_deg(rgb), 0), 12)
+        rgb2 = tuple(got["rgb2"])
+        self.assertTrue(len(rgb2) == 3 and all(isinstance(c, int) and 0 <= c <= 255 for c in rgb2))
+        self.assertEqual(got["hex2"], "#%02x%02x%02x" % rgb2)
+        self.assertEqual(got["rgb2_rm"], "%d,%d,%d" % rgb2)
 
         self.assertEqual(none["art"], "no-art")
         self.assertEqual(tuple(none["rgb"]), nowplaying.FALLBACK_RGB)
         self.assertEqual(none["rgb_rm"], "%d,%d,%d" % nowplaying.FALLBACK_RGB)
+        self.assertEqual(tuple(none["rgb2"]), nowplaying.FALLBACK_RGB)
+        self.assertEqual(none["hex2"], "#%02x%02x%02x" % nowplaying.FALLBACK_RGB)
 
 
 if __name__ == "__main__":

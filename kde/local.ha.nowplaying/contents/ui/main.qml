@@ -5,6 +5,14 @@
  * Reads the same unauthenticated /local/nowplaying.json the Home Assistant
  * package already writes, so nothing on the HA side changes and no access
  * token is stored on this machine.
+ *
+ * Title, artist and source are each at most maxTextWidth wide; a line that
+ * doesn't fit holds, then scrolls (Marquee.qml). The panel is frosted glass
+ * (Frost.qml) unless that's turned off.
+ *
+ * Sharpness: sizes go through px() (uiScale) and fs() (never under
+ * minTextSize), and the text is hinted with a hard 1 px shadow (Marquee.qml)
+ * instead of a blurred layer effect.
  */
 import QtQuick
 import QtQuick.Layouts
@@ -26,10 +34,17 @@ PlasmoidItem {
     // Same rule as the skin: only visible while playing or paused.
     readonly property bool active: np !== null && (np.state === "playing" || np.state === "paused")
     readonly property color accent: np && np.hex ? np.hex : "#aab2be"
+    // The cover's second colour (hex2 in the feed) for the source line; the accent when there is none.
+    readonly property color accent2: np && np.hex2 ? np.hex2 : accent
     readonly property bool hasArt: np !== null && np.art === "ok" && (np.cover_url || "") !== ""
 
     property var pending: null
     property double pendingSince: 0
+
+    // Sizes: px() scales a 1x design value by uiScale; fs() is px() for text, never under minTextSize.
+    function px(n) { return Math.round(n * (cfg.uiScale > 0 ? cfg.uiScale : 1)) }
+    function fs(n) { return Math.max(cfg.minTextSize || 0, px(n)) }
+    readonly property int artPx: px(cfg.artSize)
 
     function fetchNow() {
         if (!haUrl) return
@@ -66,36 +81,48 @@ PlasmoidItem {
 
     fullRepresentation: Item {
         id: stage
-        Layout.preferredWidth: 900
-        Layout.preferredHeight: root.cfg.artSize
-        Layout.minimumWidth: root.cfg.minWidth
-        Layout.minimumHeight: 64
+        Layout.preferredWidth: root.px(900)
+        Layout.preferredHeight: root.artPx
+        Layout.minimumWidth: root.px(root.cfg.minWidth)
+        Layout.minimumHeight: root.px(64)
 
-        readonly property int textX: panel.height + 20
-        readonly property int padR: 20
-        // The panel grows rightward to fit the longer line, from minWidth up
-        // to the widget's own width. Resize the widget to set the ceiling.
-        readonly property real wanted: textX + Math.max(titleProbe.implicitWidth,
-                                                        artistProbe.implicitWidth,
-                                                        root.cfg.showSource ? sourceProbe.implicitWidth : 0) + padR
+        readonly property int textX: panel.height + root.px(20)
+        readonly property int padR: root.px(20)
+        // The panel grows rightward to fit the longest line, capped at
+        // maxTextWidth (longer lines scroll), from minWidth up to the widget's
+        // own width.
+        readonly property real wanted: textX + Math.min(root.px(root.cfg.maxTextWidth),
+                                                        Math.max(title.naturalWidth, artist.naturalWidth,
+                                                                 source.visible ? source.naturalWidth : 0)) + padR
 
         opacity: root.active ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 250 } }
 
-        // Unconstrained copies used only to measure natural text width.
-        Text { id: titleProbe; visible: false; text: title.text; font: title.font }
-        Text { id: artistProbe; visible: false; text: artist.text; font: artist.font }
-        Text { id: sourceProbe; visible: false; text: source.text; font: source.font }
-
-        Rectangle {
+        Item {
             id: panel
+            objectName: "panel"
             anchors.left: parent.left
             anchors.bottom: parent.bottom
-            height: Math.min(parent.height, root.cfg.artSize)
-            width: Math.min(parent.width, Math.max(root.cfg.minWidth, stage.wanted))
-            radius: root.cfg.radius
-            color: root.cfg.panelColor
+            // bottomOffset lifts the panel off the widget's bottom edge: Plasma keeps desktop
+            // widgets on a 16 px grid, so an exact screen margin can need a few px here.
+            anchors.bottomMargin: root.cfg.bottomOffset
+            height: Math.min(parent.height - root.cfg.bottomOffset, root.artPx)
+            width: Math.round(Math.min(parent.width, Math.max(root.px(root.cfg.minWidth), stage.wanted)))
             Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+            Frost {
+                objectName: "frost"
+                anchors.fill: parent
+                visible: root.cfg.frosted
+                radius: root.px(root.cfg.radius)
+                tint: root.cfg.frostTint
+            }
+            Rectangle {
+                anchors.fill: parent
+                visible: !root.cfg.frosted
+                radius: root.px(root.cfg.radius)
+                color: root.cfg.panelColor
+            }
 
             // ---- artwork, rounded on the left to match the panel ----
             Item {
@@ -136,7 +163,7 @@ PlasmoidItem {
                     anchors.fill: parent
                     visible: false
                     layer.enabled: true
-                    Rectangle { anchors.fill: parent; radius: root.cfg.radius }
+                    Rectangle { anchors.fill: parent; radius: root.px(root.cfg.radius) }
                     Rectangle { anchors.right: parent.right; width: parent.width / 2; height: parent.height }
                 }
                 MultiEffect {
@@ -151,50 +178,59 @@ PlasmoidItem {
 
             // ---- text block ----
             ColumnLayout {
+                id: textBlock
                 anchors.left: parent.left
                 anchors.leftMargin: stage.textX
                 anchors.right: parent.right
                 anchors.rightMargin: stage.padR
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 4
+                // Centred on a whole pixel, so no line straddles two pixel rows.
+                y: Math.round((parent.height - implicitHeight) / 2)
+                spacing: root.px(4)
 
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    shadowEnabled: true
-                    shadowColor: root.cfg.shadowColor
-                    shadowBlur: 0.4
-                    shadowVerticalOffset: 1
-                    shadowHorizontalOffset: 1
-                }
-
-                Text {
+                Marquee {
                     id: title
+                    objectName: "title"
                     Layout.fillWidth: true
                     text: root.np ? (root.np.title || "") : ""
                     color: "white"
-                    elide: Text.ElideRight
+                    styleColor: root.cfg.shadowColor
+                    speed: root.px(root.cfg.scrollSpeed)
                     font.family: root.cfg.fontFamily
-                    font.pixelSize: root.cfg.titleSize
+                    font.hintingPreference: Font.PreferFullHinting
+                    font.pixelSize: root.fs(root.cfg.titleSize)
+                    font.weight: Font.Medium
                 }
-                Text {
+                Marquee {
                     id: artist
+                    objectName: "artist"
                     Layout.fillWidth: true
                     text: root.np ? (root.np.artist || "") : ""
                     color: root.accent
-                    elide: Text.ElideRight
+                    styleColor: root.cfg.shadowColor
+                    speed: root.px(root.cfg.scrollSpeed)
                     font.family: root.cfg.fontFamily
-                    font.pixelSize: root.cfg.artistSize
+                    font.hintingPreference: Font.PreferFullHinting
+                    font.pixelSize: root.fs(root.cfg.artistSize)
+                    font.weight: Font.Medium
                     Behavior on color { ColorAnimation { duration: 400 } }
                 }
-                Text {
+                // Where it's playing from (AirPlay, Spotify, FateCast · <pc>, HDMI ...)
+                Marquee {
                     id: source
+                    objectName: "source"
                     Layout.fillWidth: true
                     visible: root.cfg.showSource && text !== ""
                     text: root.np ? (root.np.source || "") : ""
-                    color: "#bec4cd"
-                    elide: Text.ElideRight
+                    color: root.accent2
+                    opacity: 0.85
+                    styleColor: root.cfg.shadowColor
+                    speed: root.px(root.cfg.scrollSpeed)
                     font.family: root.cfg.fontFamily
-                    font.pixelSize: 11
+                    font.hintingPreference: Font.PreferFullHinting
+                    font.pixelSize: root.fs(13)
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.5
+                    Behavior on color { ColorAnimation { duration: 400 } }
                 }
             }
         }

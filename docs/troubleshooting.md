@@ -98,6 +98,10 @@ They should not: the template only emits a time if `last_changed` is today.
 If you see a stale one, the board has not re-rendered since midnight; confirm
 the `00:00:01` trigger in the refresh automation still exists.
 
+## KDE widgets: soft text, uneven margins or washed-out colour on a projector
+
+See [On a projector or a big TV](../kde/README.md#on-a-projector-or-a-big-tv) in the KDE README: raise the widget's **Scale** and **Minimum text size**, fix cropping or skew on the projector rather than in the widget, and check the RGB range with a test pattern.
+
 ## Nothing updates at all after editing YAML
 
 `command_line` sensors need a full Home Assistant restart when first added.

@@ -6,7 +6,7 @@ cannot ask it directly without an access token living in a plain-text skin
 file, so this script runs *inside* HA (as a `command_line` sensor) and drops
 two files into `www/`, which HA serves at `/local/` with no authentication:
 
-    <name>.json         title, artist, album, state, source, accent colour
+    <name>.json         title, artist, album, state, source, two accent colours
     <name>_cover.png    the artwork, re-encoded, at a stable path
 
 Nothing secret ever leaves HA: `/local/` is unauthenticated by design, and
@@ -14,8 +14,10 @@ these two files contain only what is already on screen.
 
 The accent colour is the interesting part. It is the artwork's most dominant
 colour region, found by clustering in Oklab and ignoring specks, so the skin
-can tint text to match the album without looking washed out. See
-pick_accent().
+can tint text to match the album without looking washed out. A second colour
+(rgb2 / hex2 / rgb2_rm) is the cover's next distinct colour region, or its
+neutral tone when the cover has only one colour, for a second line or a
+two-colour design. See pick_accents().
 
 Source-agnostic: it takes whatever entity_picture / title / artist it is
 handed, so Music Assistant, Spotify, Sonos, Cast, Plex, Jellyfin, Squeezebox,
@@ -82,10 +84,11 @@ ACCENT_ITER = 12
 ACCENT_MIN_CHROMA = 0.045       # Oklab chroma; below this a pixel is neutral
 ACCENT_MIN_L = 0.30             # Oklab lightness; below this it is too dark to name
 # ...unless nothing on the cover clears it: then a second look at this, so deep
-# blues and purples (navy is ~0.25) are named instead of falling back to
-# neutral. Not the main cut: lower, the darker pixels reshape the clusters and
+# blues, reds and purples (a dark navy is ~0.21) are named instead of falling
+# back to neutral. Near-black grain sits under 0.15 and fails the chroma cut
+# anyway. Not the main cut: lower, the darker pixels reshape the clusters and
 # a teal beside a blue can merge into it.
-ACCENT_MIN_L_DARK = 0.22
+ACCENT_MIN_L_DARK = 0.18
 ACCENT_MERGE_HUE = 30           # degrees; closer clusters are one colour
 ACCENT_BLOB_SHARE = 0.0009      # smaller connected bits are specks
 ACCENT_BLOB_MIN_PX = 8
@@ -96,6 +99,11 @@ ACCENT_SIDE = 160               # thumbnail for the plain-Python path
 ACCENT_LIGHT_MIN = 0.58
 ACCENT_LIGHT_MAX = 0.82
 ACCENT_SAT_MIN = 0.45
+# A cover with only one colour gets its neutral tone as the second: the average
+# of its lit, low-chroma pixels (RGB max-min under NEUTRAL_MAX_CHROMA) at a
+# fixed light level, so it still leans warm or cool.
+SECOND_NEUTRAL_LIGHT = 0.78
+NEUTRAL_MAX_CHROMA = 0.18
 
 FALLBACK_RGB = (235, 235, 235)
 FETCH_TIMEOUT = 10
@@ -199,8 +207,8 @@ def _in_big_blobs(label, w, h, blob_min):
     return keep
 
 
-def _pick_accents_py(img, min_l=ACCENT_MIN_L):
-    """pick_accents without numpy: the same method in plain Python, on an
+def _pick_regions_py(img, min_l=ACCENT_MIN_L):
+    """pick_regions without numpy: the same method in plain Python, on an
     ACCENT_SIDE thumbnail to keep it to a few seconds."""
     import random
 
@@ -297,23 +305,23 @@ def _pick_accents_py(img, min_l=ACCENT_MIN_L):
     return tuple(colours)
 
 
-def pick_accents(img):
+def pick_regions(img):
     """(primary, secondary, third) colours of the cover, each (hue, lightness,
     saturation) in HLS or None, most dominant first. Primary is None when the
     cover has no colour worth naming; secondary and third are None when it has
     fewer distinct colours than that. See the accent tuning comment above.
 
     Runs on the full cover with numpy, which ships in the Home Assistant
-    image. Without it, it falls back to _pick_accents_py, the same method in
+    image. Without it, it falls back to _pick_regions_py, the same method in
     plain Python on an ACCENT_SIDE thumbnail."""
     try:
         import numpy as np
 
         def pick(min_l):
-            return _pick_accents_np(img, np, min_l)
+            return _pick_regions_np(img, np, min_l)
     except ImportError:
         def pick(min_l):
-            return _pick_accents_py(img, min_l)
+            return _pick_regions_py(img, min_l)
     # A second look at ACCENT_MIN_L_DARK only when the first finds no colour
     # at all, so deep navy and purple covers are still named while brighter
     # covers keep the colours the normal cut gives them.
@@ -328,7 +336,7 @@ def pick_accents(img):
 _LINEAR = None
 
 
-def _pick_accents_np(img, np, min_l=ACCENT_MIN_L):
+def _pick_regions_np(img, np, min_l=ACCENT_MIN_L):
     global _LINEAR
     rgb8 = np.asarray(img.convert("RGB"))
     h, w, _ = rgb8.shape
@@ -431,20 +439,49 @@ def _pick_accents_np(img, np, min_l=ACCENT_MIN_L):
     return tuple(colours)
 
 
-def pick_accent(img) -> tuple[int, int, int]:
-    """Choose a vibrant, readable accent colour from the artwork: the most
-    dominant colour region (pick_accents), lifted to the readability floors.
-
-    Neutral art (black, white, grey, sepia) has no hue worth tinting with, so
-    it gets FALLBACK_RGB rather than an invented colour.
-    """
-    primary = pick_accents(img)[0]
-    if primary is None:
-        return FALLBACK_RGB
-    hue, light, sat = primary
+def _floored(hls) -> tuple[int, int, int]:
+    """An HLS colour lifted to the readability floors, as 0-255 RGB."""
+    hue, light, sat = hls
     light = min(max(light, ACCENT_LIGHT_MIN), ACCENT_LIGHT_MAX)
     sat = max(sat, ACCENT_SAT_MIN)
     return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, light, sat))
+
+
+def _neutral_tone(img) -> tuple[int, int, int]:
+    """The cover's lit, low-chroma pixels averaged, at SECOND_NEUTRAL_LIGHT."""
+    small = img.copy()
+    small.thumbnail((96, 96))
+    raw = small.tobytes()
+    lit = []
+    for i in range(0, len(raw), 3):
+        r, g, b = raw[i] / 255, raw[i + 1] / 255, raw[i + 2] / 255
+        if max(r, g, b) >= 0.35 and max(r, g, b) - min(r, g, b) < NEUTRAL_MAX_CHROMA:
+            lit.append((r, g, b))
+    if not lit:
+        return FALLBACK_RGB
+    r, g, b = (sum(p[i] for p in lit) / len(lit) for i in range(3))
+    hue, _, sat = colorsys.rgb_to_hls(r, g, b)
+    return tuple(int(round(v * 255)) for v in colorsys.hls_to_rgb(hue, SECOND_NEUTRAL_LIGHT, sat))
+
+
+def pick_accents(img) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Choose two readable accent colours from the artwork.
+
+    The first is the most dominant colour region (pick_regions), lifted to the
+    readability floors. The second is the next distinct region; a one-colour
+    cover gets its neutral tone instead. Neutral art (black, white, grey, sepia)
+    has no hue worth tinting with, so its first colour is FALLBACK_RGB rather
+    than an invented one.
+    """
+    first, second, _third = pick_regions(img)
+    if first is None:
+        return FALLBACK_RGB, _neutral_tone(img)
+    return _floored(first), _floored(second) if second is not None else _neutral_tone(img)
+
+
+def pick_accent(img) -> tuple[int, int, int]:
+    """The first accent colour only; see pick_accents()."""
+    return pick_accents(img)[0]
 
 
 def fetch(url: str) -> bytes:
@@ -512,6 +549,11 @@ def main() -> int:
         # Rainmeter's FontColor wants bare "r,g,b" - handing it a preformatted
         # string keeps arithmetic out of the skin.
         "rgb_rm": "%d,%d,%d" % FALLBACK_RGB,
+        # The second accent (pick_accents): the cover's next distinct hue, or
+        # its neutral tone. Same shapes as the first.
+        "rgb2": list(FALLBACK_RGB),
+        "hex2": "#%02x%02x%02x" % FALLBACK_RGB,
+        "rgb2_rm": "%d,%d,%d" % FALLBACK_RGB,
         "cover_url": "",
     }
 
@@ -558,11 +600,14 @@ def main() -> int:
         from PIL import ImageOps
 
         img = Image.open(io.BytesIO(data)).convert("RGB")
-        accent = pick_accent(img)
+        accent, accent2 = pick_accents(img)
         payload.update(
             rgb=list(accent),
             hex="#%02x%02x%02x" % accent,
             rgb_rm="%d,%d,%d" % accent,
+            rgb2=list(accent2),
+            hex2="#%02x%02x%02x" % accent2,
+            rgb2_rm="%d,%d,%d" % accent2,
         )
         # Square, and never upscaled: enlarging a small cover adds no detail,
         # it only adds bytes for the download to stall on. Rainmeter scales it
